@@ -1,0 +1,462 @@
+openapi: "3.0.3"
+
+info:
+  title: IoT Aquaculture Backend
+  version: "1.0.0"
+  description: |
+    Backend system for aquaculture environment monitoring and device control.
+
+    ## MQTT Integration
+    - **Sensor data** is received via MQTT topic `sensor/{device_id}/{metric_type}`
+    - **Control commands** are published to `control/{device_id}`
+
+    ## Quick Start
+    ```
+    docker-compose up --build
+    ```
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: health
+    description: System health check
+  - name: devices
+    description: Device management and control
+  - name: sensors
+    description: Sensor data retrieval
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # Health
+  # ---------------------------------------------------------------------------
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: health_check
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ---------------------------------------------------------------------------
+  # Devices
+  # ---------------------------------------------------------------------------
+  /devices:
+    get:
+      tags: [devices]
+      summary: List all devices
+      operationId: list_devices
+      responses:
+        "200":
+          description: Array of all registered devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeviceResponse"
+              example:
+                - id: 1
+                  device_id: esp32_1
+                  name: "Tank A Sensor"
+                  type: esp32
+                  status: "ON"
+                  location: "Tank A"
+                  last_seen: "2024-01-15T10:30:00"
+                  created_at: "2024-01-01T00:00:00"
+                  updated_at: "2024-01-15T10:30:00"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /devices/{device_id}:
+    get:
+      tags: [devices]
+      summary: Get a single device
+      operationId: get_device
+      parameters:
+        - $ref: "#/components/parameters/DeviceIdPath"
+      responses:
+        "200":
+          description: Device details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /devices/{device_id}/control:
+    post:
+      tags: [devices]
+      summary: Send a control command to a device
+      operationId: control_device
+      description: |
+        Publishes a command to the MQTT topic `control/{device_id}`.
+
+        - **ON / OFF** — also updates `devices.status` in the database
+        - **FEED / RESET / CHANGE_WATER** — published via MQTT only
+
+        All actions are logged to `device_history` with `source = api`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlRequest"
+            examples:
+              turn_on:
+                summary: Turn device ON
+                value:
+                  action: "ON"
+              turn_off:
+                summary: Turn device OFF
+                value:
+                  action: "OFF"
+              feed:
+                summary: Trigger feeding
+                value:
+                  action: "FEED"
+              reset:
+                summary: Reset device
+                value:
+                  action: "RESET"
+              change_water:
+                summary: Trigger water change
+                value:
+                  action: "CHANGE_WATER"
+      responses:
+        "200":
+          description: Command sent successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlResponse"
+              example:
+                device_id: esp32_1
+                action: "ON"
+                status: success
+                message: "Command 'ON' sent to device 'esp32_1' successfully."
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Sensors
+  # ---------------------------------------------------------------------------
+  /sensors/latest:
+    get:
+      tags: [sensors]
+      summary: Get latest sensor values per metric for a device
+      operationId: get_latest_sensors
+      description: |
+        Returns the most recent reading for **each metric_type** recorded by the
+        specified device. Useful for a live dashboard view.
+      parameters:
+        - name: device_id
+          in: query
+          required: true
+          description: The device_id to query latest readings for
+          schema:
+            type: string
+            example: esp32_1
+      responses:
+        "200":
+          description: Latest reading per metric type
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LatestSensorResponse"
+              example:
+                - device_id: esp32_1
+                  metric_type: temperature
+                  value: 28.5
+                  unit: "C"
+                  created_at: "2024-01-15T10:30:00"
+                - device_id: esp32_1
+                  metric_type: ph
+                  value: 7.2
+                  unit: pH
+                  created_at: "2024-01-15T10:30:05"
+                - device_id: esp32_1
+                  metric_type: o2
+                  value: 6.8
+                  unit: mg/L
+                  created_at: "2024-01-15T10:30:10"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /sensors/history:
+    get:
+      tags: [sensors]
+      summary: Get time-series history for a metric type
+      operationId: get_sensor_history
+      description: |
+        Returns the most recent `limit` readings for the given `metric_type`
+        across **all devices**, ordered by `created_at` descending.
+      parameters:
+        - name: metric_type
+          in: query
+          required: true
+          description: Metric type to retrieve history for
+          schema:
+            type: string
+            enum:
+              - temperature
+              - ph
+              - nh3
+              - o2
+              - water_level
+              - tds
+              - turbidity
+            example: temperature
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of records to return (1–1000)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+            example: 50
+      responses:
+        "200":
+          description: Time-series sensor readings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SensorDataResponse"
+              example:
+                - id: 42
+                  device_id: esp32_1
+                  metric_type: temperature
+                  value: 28.5
+                  unit: "C"
+                  created_at: "2024-01-15T10:30:00"
+                - id: 41
+                  device_id: esp32_1
+                  metric_type: temperature
+                  value: 28.3
+                  unit: "C"
+                  created_at: "2024-01-15T10:25:00"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+# =============================================================================
+# Components
+# =============================================================================
+components:
+
+  # ---------------------------------------------------------------------------
+  # Parameters
+  # ---------------------------------------------------------------------------
+  parameters:
+    DeviceIdPath:
+      name: device_id
+      in: path
+      required: true
+      description: Unique device identifier (e.g. `esp32_1`, `PUMP_OXY_01`)
+      schema:
+        type: string
+        example: esp32_1
+
+  # ---------------------------------------------------------------------------
+  # Schemas
+  # ---------------------------------------------------------------------------
+  schemas:
+
+    DeviceResponse:
+      type: object
+      required: [id, device_id, name, type, status, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        device_id:
+          type: string
+          example: esp32_1
+        name:
+          type: string
+          example: "Tank A Sensor"
+        type:
+          type: string
+          enum: [esp32, pump, feeder, relay]
+          example: esp32
+        status:
+          type: string
+          enum: [ON, OFF]
+          example: "ON"
+        location:
+          type: string
+          nullable: true
+          example: "Tank A"
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2024-01-15T10:30:00"
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-01-01T00:00:00"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00"
+
+    ControlRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [ON, OFF, FEED, RESET, CHANGE_WATER]
+          example: "ON"
+
+    ControlResponse:
+      type: object
+      required: [device_id, action, status, message]
+      properties:
+        device_id:
+          type: string
+          example: esp32_1
+        action:
+          type: string
+          example: "ON"
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: "Command 'ON' sent to device 'esp32_1' successfully."
+
+    SensorDataResponse:
+      type: object
+      required: [id, device_id, metric_type, value, unit, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 42
+        device_id:
+          type: string
+          example: esp32_1
+        metric_type:
+          type: string
+          example: temperature
+        value:
+          type: number
+          format: float
+          example: 28.5
+        unit:
+          type: string
+          example: "C"
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00"
+
+    LatestSensorResponse:
+      type: object
+      required: [device_id, metric_type, value, unit, created_at]
+      properties:
+        device_id:
+          type: string
+          example: esp32_1
+        metric_type:
+          type: string
+          example: temperature
+        value:
+          type: number
+          format: float
+          example: 28.5
+        unit:
+          type: string
+          example: "C"
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00"
+
+    DeviceHistoryResponse:
+      type: object
+      required: [id, device_id, action, status, source, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 10
+        device_id:
+          type: string
+          example: esp32_1
+        action:
+          type: string
+          enum: [ON, OFF, FEED, RESET, CHANGE_WATER]
+          example: "ON"
+        status:
+          type: string
+          enum: [success, failed]
+          example: success
+        source:
+          type: string
+          enum: [manual, api, schedule]
+          example: api
+        note:
+          type: string
+          nullable: true
+          example: "Action 'ON' triggered via REST API."
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00"
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          example: "Device 'esp32_1' not found."
+
+  # ---------------------------------------------------------------------------
+  # Reusable responses
+  # ---------------------------------------------------------------------------
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            detail: "Device 'esp32_1' not found."
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            detail: "Failed to retrieve devices."

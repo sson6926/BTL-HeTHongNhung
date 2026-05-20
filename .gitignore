@@ -1,0 +1,72 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Environment & Secrets
+# =========================
+.env
+.env.local
+.env.production
+.env.staging
+# .env.example is intentionally NOT ignored (safe to commit)
+
+# =========================
+# Docker
+# =========================
+# Ignore runtime volumes but keep config
+mosquitto/data/
+mosquitto/log/
+
+# =========================
+# Database
+# =========================
+*.sql.bak
+*.dump
+
+# =========================
+# IDE & Editors
+# =========================
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# Testing & Coverage
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# =========================
+# MyPy / Type checking
+# =========================
+.mypy_cache/
+.dmypy.json

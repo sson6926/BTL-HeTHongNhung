@@ -1,0 +1,82 @@
+@startuml IoT Aquaculture Use Case Diagram
+
+skinparam actorStyle awesome
+skinparam packageStyle rectangle
+skinparam usecaseBorderColor #4A90D9
+skinparam usecaseBackgroundColor #EBF5FB
+skinparam actorBorderColor #2C3E50
+skinparam arrowColor #2C3E50
+skinparam packageBorderColor #AAB7B8
+
+title Sơ đồ Use Case - Hệ thống Giám sát Nuôi trồng Thủy sản IoT
+
+' =====================
+' ACTORS
+' =====================
+actor "Người dùng\n(Dashboard)" as User
+actor "Thiết bị ESP32\n(Sensor Node)" as ESP32
+actor "MQTT Broker\n(Mosquitto)" as MQTT
+
+' =====================
+' SYSTEM BOUNDARY
+' =====================
+rectangle "IoT Aquaculture Backend" {
+
+    ' --- Nhóm: Quản lý thiết bị ---
+    package "Quản lý Thiết bị" {
+        usecase "UC01\nXem danh sách thiết bị" as UC01
+        usecase "UC02\nXem chi tiết thiết bị" as UC02
+        usecase "UC03\nĐiều khiển thiết bị\n(ON/OFF/FEED/RESET)" as UC03
+        usecase "UC04\nCập nhật trạng thái\nthiết bị" as UC04
+        usecase "UC05\nGhi lịch sử\nhành động" as UC05
+    }
+
+    ' --- Nhóm: Dữ liệu cảm biến ---
+    package "Dữ liệu Cảm biến" {
+        usecase "UC06\nNhận dữ liệu cảm biến\nqua MQTT" as UC06
+        usecase "UC07\nLưu dữ liệu cảm biến\nvào DB" as UC07
+        usecase "UC08\nXem dữ liệu mới nhất\ntheo thiết bị" as UC08
+        usecase "UC09\nXem lịch sử\ntheo metric" as UC09
+        usecase "UC10\nCập nhật last_seen\nthiết bị" as UC10
+    }
+
+    ' --- Nhóm: Hệ thống ---
+    package "Hệ thống" {
+        usecase "UC11\nKiểm tra trạng thái\nhệ thống (Health)" as UC11
+        usecase "UC12\nPublish lệnh điều khiển\nqua MQTT" as UC12
+        usecase "UC13\nTự động kết nối lại\nMQTT" as UC13
+    }
+}
+
+' =====================
+' USER RELATIONSHIPS
+' =====================
+User --> UC01
+User --> UC02
+User --> UC03
+User --> UC08
+User --> UC09
+User --> UC11
+
+' =====================
+' ESP32 RELATIONSHIPS
+' =====================
+ESP32 --> MQTT : publish\nsensor/+/+
+MQTT --> UC06  : forward message
+
+' =====================
+' INCLUDE / EXTEND
+' =====================
+UC03 ..> UC04 : <<include>>
+UC03 ..> UC05 : <<include>>
+UC03 ..> UC12 : <<include>>
+
+UC06 ..> UC07 : <<include>>
+UC06 ..> UC10 : <<include>>
+
+UC12 --> MQTT : publish\ncontrol/{device_id}
+MQTT --> ESP32 : subscribe\ncontrol/+
+
+UC13 ..> UC06 : <<extend>>
+
+@enduml
