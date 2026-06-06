@@ -60,32 +60,34 @@ async def control_device(device_id: str, body: ControlRequest, db: DbDep):
             detail=f"Device '{device_id}' not found.",
         )
 
+    target = body.target
     action = body.action
 
     try:
-        # Publish MQTT command
-        mqtt_client.publish(f"control/{device_id}", {"action": action})
-        logger.info("Published control command to control/%s: action=%s", device_id, action)
+        # Build and publish MQTT command with target + action
+        payload = {"target": target, "action": action}
+        mqtt_client.publish(f"control/{device_id}", payload)
+        logger.info("Published control command to control/%s: %s", device_id, payload)
 
         # Update device status only for ON/OFF actions
         if action in ("ON", "OFF"):
             await device_service.update_device_status(db, device_id, action)
 
-        # Log to device_history
+        # Log to device_history including target
         await device_service.log_device_history(
             db=db,
             device_id=device_id,
             action=action,
             status="success",
             source="api",
-            note=f"Action '{action}' triggered via REST API.",
+            note=f"Target '{target}' action '{action}' triggered via REST API.",
         )
 
         return ControlResponse(
             device_id=device_id,
             action=action,
             status="success",
-            message=f"Command '{action}' sent to device '{device_id}' successfully.",
+            message=f"Command '{action}' (target: {target}) sent to device '{device_id}' successfully.",
         )
 
     except Exception as exc:
