@@ -17,7 +17,6 @@ class SensorData(Base):
     )
     metric_type: Mapped[str] = mapped_column(String(50), nullable=False)
     value: Mapped[float] = mapped_column(Float, nullable=False)
-    unit: Mapped[str] = mapped_column(String(20), nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=func.now(), server_default=func.now())
 
     # Relationship

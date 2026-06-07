@@ -13,10 +13,7 @@ class Device(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     device_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    type: Mapped[str] = mapped_column(
-        Enum("esp32", "pump", "feeder", "relay", name="device_type_enum"),
-        nullable=False,
-    )
+    type: Mapped[str] = mapped_column(String(20), default="esp32", nullable=False)
     status: Mapped[str] = mapped_column(
         Enum("ON", "OFF", name="device_status_enum"),
         default="OFF",
