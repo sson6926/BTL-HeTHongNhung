@@ -1,12 +1,15 @@
 import asyncio
 import logging
 
+    # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.actuators import router as actuators_router
 from app.api.devices import router as devices_router
 from app.api.sensors import router as sensors_router
+from app.api.thresholds import router as thresholds_router
 from app.db.session import init_db
 from app.mqtt.client import mqtt_client
 
@@ -70,6 +73,7 @@ async def shutdown() -> None:
 # ---------------------------------------------------------------------------
 app.include_router(actuators_router, prefix="/actuators", tags=["actuators"])
 app.include_router(devices_router, prefix="/devices", tags=["devices"])
+app.include_router(thresholds_router, prefix="/devices", tags=["thresholds"])
 app.include_router(sensors_router, prefix="/sensors", tags=["sensors"])
 
 

@@ -1,5 +1,6 @@
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter
-
+# pyrefly: ignore [missing-import]
 from app.schemas.actuator import ActuatorInfo
 
 router = APIRouter()
