@@ -1,11 +1,15 @@
 import logging
 from typing import Annotated
 
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+# pyrefly: ignore [missing-import]
 from app.schemas.sensor_data import SensorDataResponse, LatestSensorResponse, WaterMetricsResponse
+# pyrefly: ignore [missing-import]
 from app.services import sensor_service
 
 logger = logging.getLogger(__name__)

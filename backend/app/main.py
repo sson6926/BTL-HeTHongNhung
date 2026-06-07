@@ -1,13 +1,18 @@
 import asyncio
 import logging
 
+    # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.actuators import router as actuators_router
 from app.api.devices import router as devices_router
 from app.api.sensors import router as sensors_router
+from app.api.thresholds import router as thresholds_router
 from app.db.session import init_db
 from app.mqtt.client import mqtt_client
+from app.services.prediction_service import prediction_service
 
 # ---------------------------------------------------------------------------
 # Logging configuration
@@ -48,6 +53,9 @@ async def startup() -> None:
     # Initialise database (create tables if they don't exist)
     await init_db()
 
+    # Load LSTM water quality prediction model
+    prediction_service.load()
+
     # Give the MQTT client a reference to the running event loop so that
     # paho callbacks (which run in a separate thread) can schedule coroutines.
     loop = asyncio.get_running_loop()
@@ -67,7 +75,9 @@ async def shutdown() -> None:
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
+app.include_router(actuators_router, prefix="/actuators", tags=["actuators"])
 app.include_router(devices_router, prefix="/devices", tags=["devices"])
+app.include_router(thresholds_router, prefix="/devices", tags=["thresholds"])
 app.include_router(sensors_router, prefix="/sensors", tags=["sensors"])
 
 
