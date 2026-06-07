@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import Literal, Optional
 
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, ConfigDict
+
+PondType = Literal["ca_tra", "ca_ro_phi", "ca_chep", "tom_the", "tom_su", "generic"]
 
 
 class DeviceBase(BaseModel):
@@ -10,6 +13,7 @@ class DeviceBase(BaseModel):
     type: Literal["esp32"] = "esp32"
     status: Literal["ON", "OFF"] = "OFF"
     location: Optional[str] = None
+    pond_type: Optional[PondType] = None
 
 
 class DeviceCreate(DeviceBase):

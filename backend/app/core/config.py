@@ -13,6 +13,12 @@ class Settings(BaseSettings):
 
     APP_ENV: str = "development"
 
+    # ML prediction model paths (mounted via docker-compose volume)
+    ML_MODEL_PATH: str = "/ml_artifacts/lstm_water_quality.pth"
+    ML_SCALER_PATH: str = "/ml_artifacts/scaler.pkl"
+    # Lookback window length — must match training configuration
+    ML_LOOKBACK: int = 24
+
     @property
     def DATABASE_URL(self) -> str:
         return (

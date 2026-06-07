@@ -42,7 +42,7 @@ async def get_db() -> AsyncSession:
 async def init_db() -> None:
     """Create all tables on startup."""
     # Import models so they are registered with Base metadata
-    from app.models import device, sensor_data, device_history  # noqa: F401
+    from app.models import device, sensor_data, device_history, sensor_threshold  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

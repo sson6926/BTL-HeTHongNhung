@@ -2,7 +2,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select, update
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.device import Device
@@ -21,6 +23,16 @@ async def get_device_by_id(db: AsyncSession, device_id: str) -> Optional[Device]
     """Return a single device by its device_id string, or None if not found."""
     result = await db.execute(select(Device).where(Device.device_id == device_id))
     return result.scalar_one_or_none()
+
+
+async def create_device(db: AsyncSession, data: dict) -> Device:
+    """Tạo device mới và flush (chưa commit)."""
+    device = Device(**data)
+    db.add(device)
+    await db.flush()
+    await db.refresh(device)
+    logger.info("Created device: device_id=%s pond_type=%s", device.device_id, device.pond_type)
+    return device
 
 
 async def update_device_status(db: AsyncSession, device_id: str, status: str) -> Device:
