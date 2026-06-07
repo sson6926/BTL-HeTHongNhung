@@ -4,6 +4,7 @@ import logging
 import threading
 from typing import Any, Optional
 
+# pyrefly: ignore [missing-import]
 import paho.mqtt.client as mqtt
 
 from app.core.config import settings
@@ -178,12 +179,13 @@ class MQTTClient:
     ) -> None:
         """Lưu tất cả metric từ 1 MQTT message vào DB với cùng timestamp."""
         from app.db.session import AsyncSessionLocal
-        from app.services import sensor_service, device_service
+        from app.services import sensor_service, device_service, rule_engine
 
         async with AsyncSessionLocal() as db:
             try:
                 await sensor_service.save_all_sensor_data(db, device_id, metrics)
                 await device_service.update_last_seen(db, device_id)
+                await rule_engine.evaluate_rules(db, device_id, metrics)
                 await db.commit()
             except Exception as exc:
                 await db.rollback()

@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy import BigInteger, String, Enum, func
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -20,6 +22,7 @@ class Device(Base):
         nullable=False,
     )
     location: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pond_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     last_seen: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=func.now(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

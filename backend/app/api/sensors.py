@@ -1,20 +1,16 @@
 import logging
-from datetime import datetime, timezone
 from typing import Annotated
 
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.db.session import get_db
-from app.schemas.sensor_data import (
-    LatestSensorResponse,
-    SensorDataResponse,
-    WaterMetricsResponse,
-    WaterQualityForecastResponse,
-)
+# pyrefly: ignore [missing-import]
+from app.schemas.sensor_data import SensorDataResponse, LatestSensorResponse, WaterMetricsResponse
+# pyrefly: ignore [missing-import]
 from app.services import sensor_service
-from app.services.prediction_service import prediction_service
 
 logger = logging.getLogger(__name__)
 
@@ -99,96 +95,3 @@ async def get_water_metrics(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve water metrics.",
         ) from exc
-
-
-@router.get(
-    "/predict",
-    response_model=WaterQualityForecastResponse,
-    summary="Forecast future water quality using the LSTM model",
-)
-async def predict_water_quality(
-    db: DbDep,
-    device_id: str = Query(..., description="Device ID to forecast water quality for"),
-    steps: int = Query(
-        12, ge=1, le=48,
-        description="Number of future hourly steps to forecast (1–48)",
-    ),
-):
-    """
-    Retrieve the last 24 sensor readings (water_pH, TDS, water_temp) for the
-    given device from the database, then run the pre-trained LSTM model to
-    forecast the next `steps` hourly values.
-
-    **Requires** at least 24 historical data points per metric in the database.
-
-    Returns a `WaterQualityForecastResponse` containing:
-    - Metadata (device_id, generated_at, input_points, forecast_steps)
-    - A list of `WaterQualityForecastPoint` objects with forecast_time, water_pH,
-      TDS, and water_temp for each predicted hour.
-    """
-    # 1. Check that the model is loaded
-    if not prediction_service.is_ready:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "LSTM prediction model is not loaded. "
-                "Check that model artifacts are mounted correctly and the server "
-                "started without errors."
-            ),
-        )
-
-    # 2. Fetch recent historical data from DB
-    try:
-        recent_data, last_timestamp = (
-            await sensor_service.get_recent_water_metrics_for_prediction(
-                db, device_id, lookback=settings.ML_LOOKBACK
-            )
-        )
-    except ValueError as exc:
-        logger.warning("Insufficient data for prediction: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-    except Exception as exc:
-        logger.exception(
-            "DB error while fetching prediction data for device %s: %s",
-            device_id, exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve sensor data for prediction.",
-        ) from exc
-
-    # 3. Run LSTM inference (CPU-bound but fast; no need for run_in_executor
-    #    for a ~24-step sliding-window prediction)
-    try:
-        forecasts = prediction_service.predict(
-            recent_data=recent_data,
-            steps=steps,
-            last_timestamp=last_timestamp,
-        )
-    except RuntimeError as exc:
-        logger.error("Prediction service error: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
-    except Exception as exc:
-        logger.exception(
-            "Unexpected error during LSTM inference for device %s: %s",
-            device_id, exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="LSTM inference failed.",
-        ) from exc
-
-    # 4. Build and return response
-    return WaterQualityForecastResponse(
-        device_id=device_id,
-        generated_at=datetime.now(timezone.utc),
-        input_points=len(recent_data),
-        forecast_steps=steps,
-        forecasts=forecasts,
-    )

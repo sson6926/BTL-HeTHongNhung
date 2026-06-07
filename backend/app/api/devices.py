@@ -1,13 +1,15 @@
 import logging
 from typing import Annotated
 
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.mqtt.client import mqtt_client
-from app.schemas.device import DeviceResponse, ControlRequest, ControlResponse
-from app.services import device_service
+from app.schemas.device import DeviceCreate, DeviceResponse, ControlRequest, ControlResponse
+from app.services import device_service, threshold_service
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,40 @@ async def list_devices(db: DbDep):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve devices.",
         ) from exc
+
+
+@router.post(
+    "/",
+    response_model=DeviceResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Tạo device mới và seed ngưỡng mặc định theo loại ao",
+)
+async def create_device(body: DeviceCreate, db: DbDep):
+    """
+    Tạo device mới. Nếu `pond_type` được cung cấp, tự động seed
+    ngưỡng cảnh báo mặc định cho thiết bị đó.
+    """
+    existing = await device_service.get_device_by_id(db, body.device_id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Device '{body.device_id}' already exists.",
+        )
+
+    device = await device_service.create_device(db, body.model_dump())
+
+    if body.pond_type:
+        await threshold_service.seed_default_thresholds(
+            db, device.device_id, pond_type=body.pond_type
+        )
+        logger.info(
+            "Seeded thresholds for new device=%s pond_type=%s",
+            device.device_id, body.pond_type,
+        )
+
+    await db.commit()
+    await db.refresh(device)
+    return device
 
 
 @router.get("/{device_id}", response_model=DeviceResponse, summary="Get a single device")
