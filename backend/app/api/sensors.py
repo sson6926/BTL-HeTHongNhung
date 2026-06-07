@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.schemas.sensor_data import SensorDataResponse, LatestSensorResponse
+from app.schemas.sensor_data import SensorDataResponse, LatestSensorResponse, WaterMetricsResponse
 from app.services import sensor_service
 
 logger = logging.getLogger(__name__)
@@ -63,4 +63,31 @@ async def get_sensor_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve sensor history.",
+        ) from exc
+
+
+@router.get(
+    "/water-metrics",
+    response_model=list[WaterMetricsResponse],
+    summary="Get latest 24 water metrics (pH, TDS, temperature)",
+)
+async def get_water_metrics(
+    db: DbDep,
+    device_id: str = Query(..., description="The device_id to query water metrics for"),
+    limit: int = Query(24, ge=1, le=100, description="Maximum number of records to return"),
+):
+    """
+    Return the latest `limit` records grouped by timestamp, containing water_pH, TDS, and water_temp.
+    Each object contains values for all 3 metrics at the same timestamp (nullable if not available).
+    """
+    try:
+        records = await sensor_service.get_water_metrics_24(db, device_id, limit)
+        return records
+    except Exception as exc:
+        logger.exception(
+            "Failed to get water metrics for device %s: %s", device_id, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve water metrics.",
         ) from exc
