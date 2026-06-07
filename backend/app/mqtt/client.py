@@ -85,9 +85,9 @@ class MQTTClient:
             self._connected = True
             self._reconnect_count = 0
             logger.info("MQTT connected successfully.")
-            # Subscribe to all sensor topics: sensor/{device_id}/{metric_type}
-            client.subscribe("sensor/+/+", qos=1)
-            logger.info("Subscribed to sensor/+/+")
+            # Subscribe to bulk sensor topic: sensor/{device_id}/all
+            client.subscribe("sensor/+/all", qos=1)
+            logger.info("Subscribed to sensor/+/all")
         else:
             logger.error("MQTT connection failed with return code %s", rc)
 
@@ -111,42 +111,59 @@ class MQTTClient:
         msg: mqtt.MQTTMessage,
     ) -> None:
         """
-        Handle incoming sensor messages.
+        Handle incoming bulk sensor messages.
 
-        Topic format: sensor/{device_id}/{metric_type}
-        Payload:      {"value": <float>}  # unit removed; agreement between devices/team
+        Topic format: sensor/{device_id}/all
+        Payload: {
+            "nh3": 0.35, "o2": 7.8, "ph": 7.2, "tds": 450,
+            "turbidity": 12.5, "temperature": 28.4, "water_level": 35.7
+        }
+        Tất cả metric trong 1 message được lưu vào DB với cùng timestamp.
         """
         topic = msg.topic
         try:
             parts = topic.split("/")
-            if len(parts) != 3 or parts[0] != "sensor":
+            if len(parts) != 3 or parts[0] != "sensor" or parts[2] != "all":
                 logger.warning("Unexpected topic format: %s", topic)
                 return
 
-            _, device_id, metric_type = parts
+            device_id = parts[1]
 
-            payload = json.loads(msg.payload.decode("utf-8"))
-            value: float = float(payload["value"])
+            metrics: dict[str, float] = json.loads(msg.payload.decode("utf-8"))
+            if not isinstance(metrics, dict) or not metrics:
+                logger.warning("Invalid payload on topic '%s': expected non-empty dict", topic)
+                return
+
+            # Validate: tất cả value phải là số
+            parsed: dict[str, float] = {}
+            for k, v in metrics.items():
+                try:
+                    parsed[k] = float(v)
+                except (TypeError, ValueError):
+                    logger.warning("Skipping non-numeric metric '%s'=%r on topic '%s'", k, v, topic)
+
+            if not parsed:
+                logger.warning("No valid metrics in payload on topic '%s'", topic)
+                return
 
             logger.debug(
-                "Received sensor data: device=%s metric=%s value=%s",
+                "Received bulk sensor data: device=%s metrics=%s",
                 device_id,
-                metric_type,
-                value,
+                list(parsed.keys()),
             )
 
             if self._loop is None:
                 logger.error("Event loop not set; cannot persist sensor data.")
                 return
 
-            # Schedule async DB writes on the FastAPI event loop
+            # Schedule async DB writes trên FastAPI event loop
             asyncio.run_coroutine_threadsafe(
-                self._persist_sensor_data(device_id, metric_type, value),
+                self._persist_all_sensor_data(device_id, parsed),
                 self._loop,
             )
 
-        except (KeyError, ValueError, json.JSONDecodeError) as exc:
-            logger.error("Failed to parse MQTT message on topic '%s': %s", topic, exc)
+        except json.JSONDecodeError as exc:
+            logger.error("Failed to decode JSON on topic '%s': %s", topic, exc)
         except Exception as exc:
             logger.exception("Unexpected error in on_message for topic '%s': %s", topic, exc)
 
@@ -154,27 +171,25 @@ class MQTTClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _persist_sensor_data(
+    async def _persist_all_sensor_data(
         self,
         device_id: str,
-        metric_type: str,
-        value: float,
+        metrics: dict[str, float],
     ) -> None:
-        """Save sensor reading and update device last_seen inside an async DB session."""
+        """Lưu tất cả metric từ 1 MQTT message vào DB với cùng timestamp."""
         from app.db.session import AsyncSessionLocal
         from app.services import sensor_service, device_service
 
         async with AsyncSessionLocal() as db:
             try:
-                await sensor_service.save_sensor_data(db, device_id, metric_type, value)
+                await sensor_service.save_all_sensor_data(db, device_id, metrics)
                 await device_service.update_last_seen(db, device_id)
                 await db.commit()
             except Exception as exc:
                 await db.rollback()
                 logger.error(
-                    "DB error persisting sensor data for device=%s metric=%s: %s",
+                    "DB error persisting bulk sensor data for device=%s: %s",
                     device_id,
-                    metric_type,
                     exc,
                 )
 

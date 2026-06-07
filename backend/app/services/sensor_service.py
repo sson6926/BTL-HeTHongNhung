@@ -1,6 +1,5 @@
 import logging
-from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +31,38 @@ async def save_sensor_data(
         value,
     )
     return record
+
+
+async def save_all_sensor_data(
+    db: AsyncSession,
+    device_id: str,
+    metrics: dict[str, float],
+) -> list[SensorData]:
+    """
+    Lưu tất cả metric từ 1 MQTT message vào DB với cùng timestamp.
+
+    Tất cả SensorData row được tạo với cùng `created_at` để đảm bảo
+    dữ liệu từ 1 lần đo có thể được ghép lại chính xác theo thời gian.
+    """
+    now = datetime.now(timezone.utc)
+    records = [
+        SensorData(
+            device_id=device_id,
+            metric_type=metric_type,
+            value=value,
+            created_at=now,
+        )
+        for metric_type, value in metrics.items()
+    ]
+    db.add_all(records)
+    await db.flush()
+    logger.debug(
+        "Saved %d sensor metrics for device=%s at %s",
+        len(records),
+        device_id,
+        now.isoformat(),
+    )
+    return records
 
 
 async def get_latest_by_device(db: AsyncSession, device_id: str) -> list[SensorData]:
@@ -85,42 +116,38 @@ async def get_water_metrics_24(
     limit: int = 24,
 ) -> list[dict]:
     """
-    Return the latest `limit` records grouped by timestamp, containing water_pH, TDS, and water_temp.
-    Returns a list of dicts: [{"water_pH": x, "TDS": y, "water_temp": z, "created_at": timestamp}, ...]
-    """
-    # Query top limit records for each of the 3 metrics
-    metrics = ["water_pH", "TDS", "water_temp"]
-    data_by_timestamp = defaultdict(dict)
+    Trả về `limit` bản ghi ghép từ 3 metric (temperature, tds, ph).
 
-    for metric in metrics:
+    Cách ghép: lấy top-`limit` giá trị mới nhất cho từng metric, sau đó
+    ghép theo thứ tự index (index 0 = cặp mới nhất). Nếu 1 metric ít dữ liệu
+    hơn thì điền None cho các vị trí thiếu.
+    """
+    _METRICS = ["temperature", "tds", "ph"]
+    data: dict[str, list[float]] = {}
+
+    for metric in _METRICS:
         stmt = (
-            select(SensorData)
+            select(SensorData.value)
             .where(
                 (SensorData.device_id == device_id)
                 & (SensorData.metric_type == metric)
             )
             .order_by(SensorData.created_at.desc())
-            .limit(limit * 2)  # Get more to handle potential duplicates/gaps
+            .limit(limit)
         )
         result = await db.execute(stmt)
-        records = result.scalars().all()
+        data[metric] = [row[0] for row in result.all()]
 
-        for record in records:
-            ts = record.created_at
-            data_by_timestamp[ts][metric] = record.value
+    # Số điểm thực tế cần trả (bằng metric có nhiều dữ liệu nhất, không quá limit)
+    n = min(max((len(v) for v in data.values()), default=0), limit)
 
-    # Sort by timestamp descending and limit to top `limit` timestamps
-    sorted_timestamps = sorted(data_by_timestamp.keys(), reverse=True)[:limit]
-
-    # Build response
     response = [
         {
-            "water_pH": data_by_timestamp[ts].get("water_pH"),
-            "TDS": data_by_timestamp[ts].get("TDS"),
-            "water_temp": data_by_timestamp[ts].get("water_temp"),
-            "created_at": ts,
+            "temperature": data["temperature"][i] if i < len(data["temperature"]) else None,
+            "tds": data["tds"][i] if i < len(data["tds"]) else None,
+            "ph": data["ph"][i] if i < len(data["ph"]) else None,
         }
-        for ts in sorted_timestamps
+        for i in range(n)
     ]
 
     logger.debug(

@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, ConfigDict
 
 
@@ -24,7 +25,6 @@ class LatestSensorResponse(BaseModel):
 
 
 class WaterMetricsResponse(BaseModel):
-    water_pH: Optional[float] = None
-    TDS: Optional[float] = None
-    water_temp: Optional[float] = None
-    created_at: datetime
+    temperature: Optional[float] = None
+    tds: Optional[float] = None
+    ph: Optional[float] = None
