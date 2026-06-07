@@ -56,12 +56,14 @@ async def log_device_history(
     action: str,
     status: str,
     source: str,
+    target: Optional[str] = None,
     note: Optional[str] = None,
 ) -> DeviceHistory:
     """Insert a new DeviceHistory record and return it."""
     history = DeviceHistory(
         device_id=device_id,
         action=action,
+        target=target,
         status=status,
         source=source,
         note=note,

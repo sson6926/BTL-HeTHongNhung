@@ -13,24 +13,21 @@ async def save_sensor_data(
     device_id: str,
     metric_type: str,
     value: float,
-    unit: str,
 ) -> SensorData:
-    """Persist a new sensor reading and return the saved object."""
+    """Persist a new sensor reading (value only) and return the saved object."""
     record = SensorData(
         device_id=device_id,
         metric_type=metric_type,
         value=value,
-        unit=unit,
     )
     db.add(record)
     await db.flush()
     await db.refresh(record)
     logger.debug(
-        "Saved sensor data: device=%s metric=%s value=%s %s",
+        "Saved sensor data: device=%s metric=%s value=%s",
         device_id,
         metric_type,
         value,
-        unit,
     )
     return record
 

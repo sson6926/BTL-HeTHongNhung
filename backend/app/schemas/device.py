@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 class DeviceBase(BaseModel):
     device_id: str
     name: str
-    type: Literal["esp32", "pump", "feeder", "relay"]
+    type: Literal["esp32"] = "esp32"
     status: Literal["ON", "OFF"] = "OFF"
     location: Optional[str] = None
 
@@ -26,6 +26,7 @@ class DeviceResponse(DeviceBase):
 
 
 class ControlRequest(BaseModel):
+    target: Literal["pump_fill", "pump_drain", "oxygen", "feeder", "relay", "esp32"]
     action: Literal["ON", "OFF", "FEED", "RESET", "CHANGE_WATER"]
 
 

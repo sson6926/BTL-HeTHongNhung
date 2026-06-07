@@ -414,6 +414,10 @@ components:
           type: string
           enum: [ON, OFF, FEED, RESET, CHANGE_WATER]
           example: "ON"
+        target:
+          type: string
+          nullable: true
+          example: "pump_fill"
         status:
           type: string
           enum: [success, failed]

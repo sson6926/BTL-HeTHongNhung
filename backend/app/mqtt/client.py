@@ -114,7 +114,7 @@ class MQTTClient:
         Handle incoming sensor messages.
 
         Topic format: sensor/{device_id}/{metric_type}
-        Payload:      {"value": <float>, "unit": "<str>"}
+        Payload:      {"value": <float>}  # unit removed; agreement between devices/team
         """
         topic = msg.topic
         try:
@@ -127,14 +127,12 @@ class MQTTClient:
 
             payload = json.loads(msg.payload.decode("utf-8"))
             value: float = float(payload["value"])
-            unit: str = str(payload.get("unit", ""))
 
             logger.debug(
-                "Received sensor data: device=%s metric=%s value=%s %s",
+                "Received sensor data: device=%s metric=%s value=%s",
                 device_id,
                 metric_type,
                 value,
-                unit,
             )
 
             if self._loop is None:
@@ -143,7 +141,7 @@ class MQTTClient:
 
             # Schedule async DB writes on the FastAPI event loop
             asyncio.run_coroutine_threadsafe(
-                self._persist_sensor_data(device_id, metric_type, value, unit),
+                self._persist_sensor_data(device_id, metric_type, value),
                 self._loop,
             )
 
@@ -161,7 +159,6 @@ class MQTTClient:
         device_id: str,
         metric_type: str,
         value: float,
-        unit: str,
     ) -> None:
         """Save sensor reading and update device last_seen inside an async DB session."""
         from app.db.session import AsyncSessionLocal
@@ -169,7 +166,7 @@ class MQTTClient:
 
         async with AsyncSessionLocal() as db:
             try:
-                await sensor_service.save_sensor_data(db, device_id, metric_type, value, unit)
+                await sensor_service.save_sensor_data(db, device_id, metric_type, value)
                 await device_service.update_last_seen(db, device_id)
                 await db.commit()
             except Exception as exc:

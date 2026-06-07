@@ -8,6 +8,7 @@ class DeviceHistoryResponse(BaseModel):
     id: int
     device_id: str
     action: Literal["ON", "OFF", "FEED", "RESET", "CHANGE_WATER"]
+    target: Optional[str] = None
     status: Literal["success", "failed"]
     source: Literal["manual", "api", "schedule"]
     note: Optional[str] = None
