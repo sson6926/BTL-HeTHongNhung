@@ -21,6 +21,7 @@ class DeviceHistory(Base):
         Enum("ON", "OFF", "FEED", "RESET", "CHANGE_WATER", name="history_action_enum"),
         nullable=False,
     )
+    target: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     status: Mapped[str] = mapped_column(
         Enum("success", "failed", name="history_status_enum"),
         nullable=False,

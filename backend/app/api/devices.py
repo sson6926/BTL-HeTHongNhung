@@ -78,9 +78,10 @@ async def control_device(device_id: str, body: ControlRequest, db: DbDep):
             db=db,
             device_id=device_id,
             action=action,
+            target=target,
             status="success",
             source="api",
-            note=f"Target '{target}' action '{action}' triggered via REST API.",
+            note=f"Action '{action}' triggered via REST API.",
         )
 
         return ControlResponse(
@@ -98,6 +99,7 @@ async def control_device(device_id: str, body: ControlRequest, db: DbDep):
                 db=db,
                 device_id=device_id,
                 action=action,
+                target=target,
                 status="failed",
                 source="api",
                 note=str(exc),
