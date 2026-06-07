@@ -13,6 +13,7 @@ services:
         condition: service_started
     volumes:
       - ./backend:/app
+      - ./water-quality-prediction/artifacts:/ml_artifacts:ro
     restart: unless-stopped
     networks:
       - iot_network

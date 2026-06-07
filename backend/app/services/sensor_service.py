@@ -154,3 +154,84 @@ async def get_water_metrics_24(
         "Retrieved %d water metric records for device=%s", len(response), device_id
     )
     return response
+
+
+async def get_recent_water_metrics_for_prediction(
+    db: AsyncSession,
+    device_id: str,
+    lookback: int = 24,
+) -> tuple[list[dict[str, float]], "datetime"]:
+    """
+    Query the most recent `lookback` hourly-equivalent data points for a device
+    that have readings for all three water-quality metrics:
+        - "ph"          -> water_pH
+        - "tds"         -> TDS
+        - "temperature" -> water_temp
+
+    Strategy:
+        1. For each of the 3 metrics, fetch the latest `lookback` rows ordered
+           by created_at DESC.
+        2. Take the intersection of available timestamps via index-alignment
+           (zip by position, oldest rows first).
+        3. Raise ValueError if fewer than `lookback` aligned rows are available.
+
+    Returns:
+        Tuple of:
+          - List of dicts [{water_pH, TDS, water_temp}] ordered oldest -> newest
+          - Datetime of the most recent row (used as anchor for forecast timestamps)
+    """
+    from datetime import datetime  # local import to avoid circular issues
+
+    _METRIC_MAP = {
+        "ph":          "water_pH",
+        "tds":         "TDS",
+        "temperature": "water_temp",
+    }
+    _DB_METRICS = list(_METRIC_MAP.keys())   # ["ph", "tds", "temperature"]
+
+    raw: dict[str, list[tuple[float, datetime]]] = {}
+
+    for metric in _DB_METRICS:
+        stmt = (
+            select(SensorData.value, SensorData.created_at)
+            .where(
+                (SensorData.device_id == device_id)
+                & (SensorData.metric_type == metric)
+            )
+            .order_by(SensorData.created_at.desc())
+            .limit(lookback)
+        )
+        result = await db.execute(stmt)
+        # Store as [(value, created_at), ...] newest first
+        raw[metric] = [(row[0], row[1]) for row in result.all()]
+
+    # Determine usable count: minimum available across all 3 metrics
+    usable = min(len(raw[m]) for m in _DB_METRICS)
+
+    if usable < lookback:
+        raise ValueError(
+            f"Not enough data for device '{device_id}'. "
+            f"Need {lookback} points per metric, but only {usable} available "
+            f"across all metrics."
+        )
+
+    # Take exactly `lookback` rows per metric, reversed to oldest→newest order
+    aligned = []
+    for i in range(lookback - 1, -1, -1):          # index lookback-1 down to 0
+        row = {
+            _METRIC_MAP[m]: raw[m][i][0]
+            for m in _DB_METRICS
+        }
+        aligned.append(row)
+
+    # last_timestamp = created_at of the most recent row (index 0 in raw)
+    last_timestamp = raw["ph"][0][1]
+
+    logger.debug(
+        "Prepared %d data points for LSTM prediction  device=%s  last_ts=%s",
+        len(aligned),
+        device_id,
+        last_timestamp,
+    )
+    return aligned, last_timestamp
+

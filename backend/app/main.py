@@ -9,6 +9,7 @@ from app.api.devices import router as devices_router
 from app.api.sensors import router as sensors_router
 from app.db.session import init_db
 from app.mqtt.client import mqtt_client
+from app.services.prediction_service import prediction_service
 
 # ---------------------------------------------------------------------------
 # Logging configuration
@@ -48,6 +49,9 @@ async def startup() -> None:
 
     # Initialise database (create tables if they don't exist)
     await init_db()
+
+    # Load LSTM water quality prediction model
+    prediction_service.load()
 
     # Give the MQTT client a reference to the running event loop so that
     # paho callbacks (which run in a separate thread) can schedule coroutines.
