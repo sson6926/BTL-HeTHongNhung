@@ -83,3 +83,45 @@ async def delete_threshold(db: AsyncSession, threshold: SensorThreshold) -> None
         "Deleted threshold: device=%s metric=%s",
         threshold.device_id, threshold.metric_type,
     )
+
+
+async def seed_default_thresholds(
+    db: AsyncSession,
+    device_id: str,
+    pond_type: str = "generic",
+) -> list[SensorThreshold]:
+    """
+    Insert ngưỡng mặc định cho device mới theo loại ao.
+    Nếu device đã có ngưỡng thì bỏ qua (không ghi đè).
+    """
+    from app.core.thresholds import DEFAULT_THRESHOLDS
+
+    templates = DEFAULT_THRESHOLDS.get(pond_type, DEFAULT_THRESHOLDS["generic"])
+    seeded = []
+
+    for tpl in templates:
+        existing = await get_by_metric(db, device_id, tpl.metric_type)
+        if existing:
+            continue  # không ghi đè ngưỡng đã có
+
+        record = SensorThreshold(
+            device_id=device_id,
+            metric_type=tpl.metric_type,
+            min_value=tpl.min_value,
+            max_value=tpl.max_value,
+            unit=tpl.unit,
+            action_target=tpl.action_target,
+            action_command=tpl.action_command,
+            auto_action=tpl.auto_action,
+        )
+        db.add(record)
+        seeded.append(record)
+
+    if seeded:
+        await db.flush()
+        logger.info(
+            "Seeded %d default thresholds for device=%s pond_type=%s",
+            len(seeded), device_id, pond_type,
+        )
+
+    return seeded
