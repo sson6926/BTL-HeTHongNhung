@@ -19,12 +19,25 @@ async function apiFetch(path, opts = {}) {
 const api = {
   health:        ()                    => fetch(`${API}/health`).then(r => r.ok),
   listDevices:   ()                    => apiFetch("/devices/"),
-  latestSensors: (deviceId)            => apiFetch(`/sensors/latest?device_id=${encodeURIComponent(deviceId)}`),
-  sensorHistory: (metric, limit = 30)  => apiFetch(`/sensors/history?metric_type=${metric}&limit=${limit}`),
-  controlDevice: (deviceId, action)    => apiFetch(`/devices/${encodeURIComponent(deviceId)}/control`, {
+  createDevice:  (payload)             => apiFetch("/devices/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify(payload),
+  }),
+  deleteDevice:  (deviceId)            => fetch(`${API}/devices/${encodeURIComponent(deviceId)}`, {
+    method: "DELETE",
+  }).then(async res => {
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || res.statusText);
+    }
+  }),
+  latestSensors: (deviceId)            => apiFetch(`/sensors/latest?device_id=${encodeURIComponent(deviceId)}`),
+  sensorHistory: (metric, limit = 30)  => apiFetch(`/sensors/history?metric_type=${metric}&limit=${limit}`),
+  controlDevice: (deviceId, target, action) => apiFetch(`/devices/${encodeURIComponent(deviceId)}/control`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target, action }),
   }),
 };
 
@@ -38,6 +51,12 @@ const METRICS = {
   turbidity:   { icon: "🌊", label: "Độ đục",             unit: "NTU",  lo: 0,   hi: 20  },
 };
 const SENSOR_ORDER = ["o2", "ph", "nh3", "temperature", "tds", "turbidity"];
+const CONTROL_TARGETS = [
+  { target: "oxygen", name: "Máy sục oxy", type: "relay", icon: "💨", bg: "#E1F5EE" },
+  { target: "pump_fill", name: "Bơm cấp nước", type: "pump", icon: "⬆️", bg: "#E6F1FB" },
+  { target: "pump_drain", name: "Bơm xả nước", type: "pump", icon: "🚿", bg: "#FAEEDA" },
+];
+const FEEDER_TARGET = { target: "feeder", name: "Hệ thống cho ăn", type: "feeder", icon: "🐠", bg: "#E6F1FB" };
 
 const PONDS_STORAGE_KEY = "aqua-dashboard-ponds";
 const DEFAULT_PONDS = [
@@ -69,6 +88,8 @@ function loadPonds() {
 
 // ── Device display helper ─────────────────────────────────────────
 function deviceDisplay(device) {
+  if (device.icon && device.bg)
+    return { icon: device.icon, bg: device.bg };
   const n = (device.name || "").toLowerCase();
   if (device.type === "feeder")
     return { icon: "🐠", bg: "#E6F1FB" };
@@ -589,7 +610,7 @@ export default function App() {
     localStorage.setItem(PONDS_STORAGE_KEY, JSON.stringify(ponds));
   }, [ponds]);
 
-  const handleAddPond = useCallback((rawPond) => {
+  const handleAddPond = useCallback(async (rawPond) => {
     const name = String(rawPond?.name ?? "").trim();
     const esp32Id = String(rawPond?.esp32Id ?? "").trim();
 
@@ -600,6 +621,14 @@ export default function App() {
     if (ponds.some(pond => pond.esp32Id.toLowerCase() === esp32Id.toLowerCase())) {
       return "Mã ESP32 này đã được gán cho một ao khác.";
     }
+
+    await api.createDevice({
+      device_id: esp32Id,
+      name: `ESP32 ${esp32Id}`,
+      type: "esp32",
+      status: "OFF",
+      location: name,
+    });
 
     setPonds(prev => [
       ...prev,
@@ -612,10 +641,16 @@ export default function App() {
     return "";
   }, [ponds]);
 
-  const handleRemovePond = useCallback((pondId) => {
+  const handleRemovePond = useCallback(async (pondId) => {
+    const pond = ponds.find(item => item.id === pondId);
+    if (pond?.esp32Id) {
+      await api.deleteDevice(pond.esp32Id);
+    }
+
     setPonds(prev => prev.filter(pond => pond.id !== pondId));
     setSelectedPondId(current => current === pondId ? null : current);
-  }, []);
+    return "";
+  }, [ponds]);
 
   const selectedPond = ponds.find(pond => pond.id === selectedPondId);
 
@@ -642,6 +677,8 @@ export default function App() {
 function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
   const [form, setForm] = useState({ name: "", esp32Id: "" });
   const [formError, setFormError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [removing, setRemoving] = useState({});
   const [devices, setDevices] = useState([]);
   const [backendOk, setBackendOk] = useState(null);
 
@@ -661,15 +698,40 @@ function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
     };
   }, []);
 
-  const handleSubmit = event => {
+  const handleSubmit = async event => {
     event.preventDefault();
-    const error = onAddPond(form);
-    if (error) {
-      setFormError(error);
-      return;
-    }
-    setForm({ name: "", esp32Id: "" });
+    setSubmitting(true);
     setFormError("");
+
+    try {
+      const error = await onAddPond(form);
+      if (error) {
+        setFormError(error);
+        return;
+      }
+      const nextDevices = await api.listDevices();
+      setDevices(nextDevices);
+      setForm({ name: "", esp32Id: "" });
+    } catch (error) {
+      setFormError(error.message || "KhÃ´ng thá»ƒ thÃªm thiáº¿t bá»‹ vÃ o database.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRemove = async pondId => {
+    setRemoving(prev => ({ ...prev, [pondId]: true }));
+    setFormError("");
+
+    try {
+      await onRemovePond(pondId);
+      const nextDevices = await api.listDevices();
+      setDevices(nextDevices);
+    } catch (error) {
+      setFormError(error.message || "KhÃ´ng thá»ƒ xÃ³a thiáº¿t bá»‹ khá»i database.");
+    } finally {
+      setRemoving(prev => ({ ...prev, [pondId]: false }));
+    }
   };
 
   const registeredCount = ponds.filter(pond =>
@@ -755,7 +817,7 @@ function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
                           <button className="primary-btn" onClick={() => onOpenPond(pond.id)}>
                             Chi tiết
                           </button>
-                          <button className="danger-btn" onClick={() => onRemovePond(pond.id)}>
+                          <button className="danger-btn" onClick={() => handleRemove(pond.id)} disabled={!!removing[pond.id]}>
                             Xóa
                           </button>
                         </div>
@@ -787,7 +849,7 @@ function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
                   />
                 </div>
                 {formError && <div className="form-error">{formError}</div>}
-                <button className="primary-btn" type="submit" style={{ width: "100%" }}>
+                <button className="primary-btn" type="submit" style={{ width: "100%" }} disabled={submitting}>
                   Thêm ao
                 </button>
               </form>
@@ -806,7 +868,8 @@ function PondDetail({ pond, onBack }) {
   const [latest,        setLatest]        = useState({});
   const [connected,     setConnected]     = useState(null);   // null=loading
   const [lastPoll,      setLastPoll]      = useState(null);
-  const [busy,          setBusy]          = useState({});     // deviceId → bool
+  const [busy,          setBusy]          = useState({});     // target → bool
+  const [targetStatus,  setTargetStatus]  = useState({});
   const [alerts,        setAlerts]        = useState([
     { id: 1, level: "ok", msg: "Frontend khởi động, đang kết nối backend…", time: new Date().toLocaleTimeString("vi-VN") },
   ]);
@@ -902,26 +965,37 @@ function PondDetail({ pond, onBack }) {
   }, [esp32Id, pushAlert]);
 
   // ── Control device ────────────────────────────────────────────
-  const handleControl = useCallback(async (deviceId, action) => {
-    setBusy(b => ({ ...b, [deviceId]: true }));
+  const handleControl = useCallback(async (target, action) => {
+    setBusy(b => ({ ...b, [target]: true }));
     try {
-      await api.controlDevice(deviceId, action);
-      pushAlert("ok", `${deviceId}: lệnh ${action} thành công`);
+      await api.controlDevice(esp32Id, target, action);
+      if (action === "ON" || action === "OFF") {
+        setTargetStatus(prev => ({ ...prev, [target]: action }));
+      }
+      pushAlert("ok", `${target}: lệnh ${action} thành công`);
       // Refresh device list to get updated status
       const devs = await api.listDevices();
       setDevices(devs);
     } catch (e) {
-      pushAlert("error", `${deviceId}: lỗi – ${e.message}`);
+      pushAlert("error", `${target}: lỗi – ${e.message}`);
     } finally {
-      setBusy(b => ({ ...b, [deviceId]: false }));
+      setBusy(b => ({ ...b, [target]: false }));
     }
-  }, [pushAlert]);
+  }, [esp32Id, pushAlert]);
 
   // ── Derived state ─────────────────────────────────────────────
   const wl = latest.water_level ?? null;
-  const controllable = devices.filter(d => d.type !== "esp32");
-  const feeder       = controllable.find(d => d.type === "feeder");
-  const actuators    = controllable.filter(d => d.type !== "feeder");
+  const actuators = CONTROL_TARGETS.map(target => ({
+    ...target,
+    device_id: target.target,
+    status: targetStatus[target.target] ?? "OFF",
+  }));
+  const feeder = {
+    ...FEEDER_TARGET,
+    device_id: FEEDER_TARGET.target,
+    status: targetStatus[FEEDER_TARGET.target] ?? "OFF",
+  };
+  const controllableCount = actuators.length + 1;
 
   const critSts = ["o2", "ph", "nh3"].map(m => statusOf(latest[m], METRICS[m].lo, METRICS[m].hi));
   const sys     = critSts.some(s => s === "danger") ? "err"
@@ -1074,56 +1148,34 @@ function PondDetail({ pond, onBack }) {
                 <div>
                   <div className="sec-head">
                     <div className="sec-title">Điều khiển thiết bị</div>
-                    <span className="sec-note">{controllable.length} thiết bị</span>
+                    <span className="sec-note">{controllableCount} thiết bị</span>
                   </div>
 
-                  {controllable.length === 0 ? (
-                    <div style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)", padding: "12px 0" }}>
-                      {connected === false
-                        ? "Backend offline – không tải được thiết bị"
-                        : "Đang tải thiết bị…"}
-                    </div>
-                  ) : (
-                    <div className="device-grid">
-                      {actuators.map(dev => {
-                        const n = dev.name.toLowerCase();
-                        const note =
-                          n.includes("sục") || n.includes("oxy") || n.includes("aerator") || dev.type === "relay"
-                            ? `O₂: ${latest.o2 != null ? (+latest.o2).toFixed(2) : "--"} mg/L · Bật khi <5.5`
-                            : n.includes("xả") || n.includes("drain")
-                            ? `NH₃: ${latest.nh3 != null ? (+latest.nh3).toFixed(2) : "--"} mg/L · Bật khi >0.5`
-                            : `Mực nước: ${wl != null ? (+wl).toFixed(0) : "--"}% · Bật khi <40%`;
-                        return (
-                          <DCard
-                            key={dev.device_id}
-                            device={dev}
-                            sensorNote={note}
-                            onControl={handleControl}
-                            busy={!!busy[dev.device_id]}
-                          />
-                        );
-                      })}
-
-                      {feeder ? (
-                        <FeederCard
-                          device={feeder}
+                  <div className="device-grid">
+                    {actuators.map(dev => {
+                      const note =
+                        dev.target === "oxygen"
+                          ? `O₂: ${latest.o2 != null ? (+latest.o2).toFixed(2) : "--"} mg/L · bật khi <5.5`
+                          : dev.target === "pump_drain"
+                          ? `NH₃: ${latest.nh3 != null ? (+latest.nh3).toFixed(2) : "--"} mg/L · bật khi >0.5`
+                          : `Mực nước: ${wl != null ? (+wl).toFixed(0) : "--"}% · bật khi <40%`;
+                      return (
+                        <DCard
+                          key={dev.device_id}
+                          device={dev}
+                          sensorNote={note}
                           onControl={handleControl}
-                          busy={!!busy[feeder.device_id]}
+                          busy={!!busy[dev.device_id]}
                         />
-                      ) : (
-                        <div className="d-card">
-                          <div className="d-top">
-                            <div className="d-icon" style={{ background: "#E6F1FB" }}>🐠</div>
-                            <div>
-                              <div className="d-name">Hệ thống cho ăn</div>
-                              <div className="d-state" style={{ color: "var(--text-dim)" }}>Chưa đăng ký</div>
-                            </div>
-                          </div>
-                          <div className="d-note">Thiết bị feeder chưa được thêm vào DB</div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                      );
+                    })}
+
+                    <FeederCard
+                      device={feeder}
+                      onControl={handleControl}
+                      busy={!!busy[feeder.device_id]}
+                    />
+                  </div>
                 </div>
 
                 {/* Alert log */}
@@ -1187,7 +1239,7 @@ function PondDetail({ pond, onBack }) {
                     Tình trạng
                   </div>
                   {[
-                    { l: "Thiết bị",  v: `${devices.length} máy` },
+                    { l: "Thiết bị",  v: `${controllableCount} target` },
                     { l: "Backend",   v: connected === null ? "…" : connected ? "Online" : "Offline" },
                     { l: "Cảnh báo", v: `${alerts.filter(a => a.level !== "ok").length} mục` },
                     { l: "Cập nhật", v: lastPoll ? lastPoll.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "--" },

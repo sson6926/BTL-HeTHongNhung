@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.mqtt.client import mqtt_client
-from app.schemas.device import DeviceResponse, ControlRequest, ControlResponse
+from app.schemas.device import DeviceCreate, DeviceResponse, ControlRequest, ControlResponse
 from app.services import device_service
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,19 @@ async def list_devices(db: DbDep):
         ) from exc
 
 
+@router.post("/", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED, summary="Create or update a device")
+async def create_device(body: DeviceCreate, db: DbDep):
+    """Create a device record from the pond registration form."""
+    try:
+        return await device_service.create_or_update_device(db, body)
+    except Exception as exc:
+        logger.exception("Failed to create device %s: %s", body.device_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create device '{body.device_id}'.",
+        ) from exc
+
+
 @router.get("/{device_id}", response_model=DeviceResponse, summary="Get a single device")
 async def get_device(device_id: str, db: DbDep):
     """Return a device by its device_id."""
@@ -42,6 +55,17 @@ async def get_device(device_id: str, db: DbDep):
     return device
 
 
+@router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a device")
+async def delete_device(device_id: str, db: DbDep):
+    """Delete a device record when a pond is removed."""
+    deleted = await device_service.delete_device(db, device_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Device '{device_id}' not found.",
+        )
+
+
 @router.post(
     "/{device_id}/control",
     response_model=ControlResponse,
@@ -52,13 +76,8 @@ async def control_device(device_id: str, body: ControlRequest, db: DbDep):
     Publish a control command via MQTT, update device status (for ON/OFF),
     and log the action to device_history.
     """
-    # Verify device exists
-    device = await device_service.get_device_by_id(db, device_id)
-    if device is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Device '{device_id}' not found.",
-        )
+    # Ensure the ESP32 controller exists before sending target commands to it.
+    await device_service.ensure_esp32_device(db, device_id)
 
     target = body.target
     action = body.action

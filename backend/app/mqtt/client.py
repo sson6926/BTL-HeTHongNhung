@@ -166,6 +166,7 @@ class MQTTClient:
 
         async with AsyncSessionLocal() as db:
             try:
+                await device_service.ensure_esp32_device(db, device_id)
                 await sensor_service.save_sensor_data(db, device_id, metric_type, value)
                 await device_service.update_last_seen(db, device_id)
                 await db.commit()

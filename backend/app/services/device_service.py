@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.device import Device
 from app.models.device_history import DeviceHistory
+from app.schemas.device import DeviceCreate
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,64 @@ async def get_device_by_id(db: AsyncSession, device_id: str) -> Optional[Device]
     """Return a single device by its device_id string, or None if not found."""
     result = await db.execute(select(Device).where(Device.device_id == device_id))
     return result.scalar_one_or_none()
+
+
+async def ensure_esp32_device(db: AsyncSession, device_id: str) -> Device:
+    """Return an ESP32 device, creating it if this device_id is seen for the first time."""
+    device = await get_device_by_id(db, device_id)
+    if device is not None:
+        return device
+
+    device = Device(
+        device_id=device_id,
+        name=f"ESP32 {device_id}",
+        type="esp32",
+        status="OFF",
+    )
+    db.add(device)
+    await db.flush()
+    await db.refresh(device)
+    logger.info("Auto-registered ESP32 device %s", device_id)
+    return device
+
+
+async def create_or_update_device(db: AsyncSession, payload: DeviceCreate) -> Device:
+    """Create a new device, or update its display metadata if it already exists."""
+    device = await get_device_by_id(db, payload.device_id)
+    if device is None:
+        device = Device(
+            device_id=payload.device_id,
+            name=payload.name,
+            type=payload.type,
+            status=payload.status,
+            location=payload.location,
+        )
+        db.add(device)
+        await db.flush()
+        await db.refresh(device)
+        logger.info("Created device %s", payload.device_id)
+        return device
+
+    device.name = payload.name
+    device.type = payload.type
+    device.location = payload.location
+    device.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    await db.refresh(device)
+    logger.info("Updated device metadata %s", payload.device_id)
+    return device
+
+
+async def delete_device(db: AsyncSession, device_id: str) -> bool:
+    """Delete a device by device_id. Related sensor/history rows cascade in the DB."""
+    device = await get_device_by_id(db, device_id)
+    if device is None:
+        return False
+
+    await db.delete(device)
+    await db.flush()
+    logger.info("Deleted device %s", device_id)
+    return True
 
 
 async def update_device_status(db: AsyncSession, device_id: str, status: str) -> Device:
