@@ -39,6 +39,34 @@ const METRICS = {
 };
 const SENSOR_ORDER = ["o2", "ph", "nh3", "temperature", "tds", "turbidity"];
 
+const PONDS_STORAGE_KEY = "aqua-dashboard-ponds";
+const DEFAULT_PONDS = [
+  { id: "pond-1", name: "Ao nuôi số 1", esp32Id: "esp32_1" },
+];
+
+function normalizePond(raw, index = 0) {
+  const name = String(raw?.name ?? "").trim();
+  const esp32Id = String(raw?.esp32Id ?? raw?.deviceId ?? "").trim();
+  if (!name || !esp32Id) return null;
+  return {
+    id: String(raw?.id ?? `${esp32Id}-${index}-${Date.now()}`),
+    name,
+    esp32Id,
+  };
+}
+
+function loadPonds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PONDS_STORAGE_KEY) || "[]");
+    const ponds = Array.isArray(parsed)
+      ? parsed.map(normalizePond).filter(Boolean)
+      : [];
+    return ponds.length ? ponds : DEFAULT_PONDS;
+  } catch {
+    return DEFAULT_PONDS;
+  }
+}
+
 // ── Device display helper ─────────────────────────────────────────
 function deviceDisplay(device) {
   const n = (device.name || "").toLowerCase();
@@ -368,6 +396,81 @@ const CSS = `
     display:flex; align-items:center; gap:8px;
   }
 
+  /* Pond overview */
+  .overview-shell { min-height:100vh; background:var(--bg); }
+  .overview-main { max-width:1180px; margin:0 auto; padding:26px 24px 34px; }
+  .overview-hero {
+    background:linear-gradient(135deg,var(--blue-900),var(--blue-600));
+    border-radius:18px; padding:24px 28px; color:#fff;
+    display:flex; justify-content:space-between; gap:20px; box-shadow:var(--shadow);
+  }
+  .overview-hero h1 { font-size:24px; line-height:1.2; letter-spacing:-.4px; margin-bottom:8px; }
+  .overview-hero p { color:var(--blue-100); font-size:13px; max-width:620px; }
+  .overview-stats { display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; }
+  .overview-stat {
+    min-width:112px; padding:12px 14px; border-radius:14px;
+    background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.15);
+  }
+  .overview-stat strong { display:block; font-size:22px; font-family:var(--font-mono); }
+  .overview-stat span { font-size:10px; color:var(--blue-100); font-family:var(--font-mono); text-transform:uppercase; }
+  .overview-layout { display:grid; grid-template-columns:1fr 320px; gap:18px; margin-top:20px; align-items:start; }
+  .pond-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; }
+  .pond-card {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:var(--radius); padding:18px; box-shadow:var(--shadow-sm);
+    display:flex; flex-direction:column; gap:14px;
+  }
+  .pond-card:hover { box-shadow:var(--shadow); border-color:var(--border-md); transform:translateY(-1px); transition:.18s; }
+  .pond-top { display:flex; gap:12px; align-items:center; }
+  .pond-icon {
+    width:46px; height:46px; border-radius:14px; background:var(--blue-50);
+    display:flex; align-items:center; justify-content:center; font-size:22px;
+  }
+  .pond-name { font-size:16px; font-weight:700; color:var(--text); }
+  .pond-meta { font-size:11px; color:var(--text-dim); font-family:var(--font-mono); margin-top:3px; }
+  .pond-info {
+    display:grid; grid-template-columns:1fr 1fr; gap:8px;
+    padding:10px; border-radius:var(--radius-sm); background:var(--blue-50);
+    border:1px solid var(--border);
+  }
+  .pond-info span { font-size:10px; color:var(--text-dim); font-family:var(--font-mono); }
+  .pond-info strong { display:block; margin-top:3px; color:var(--blue-800); font-family:var(--font-mono); font-size:12px; }
+  .pond-actions { display:flex; gap:8px; margin-top:auto; }
+  .primary-btn, .ghost-btn, .danger-btn, .back-btn {
+    border:none; border-radius:10px; padding:9px 12px; font-family:var(--font-mono);
+    font-size:11px; font-weight:700; cursor:pointer; transition:.18s;
+  }
+  .primary-btn { background:var(--blue-600); color:#fff; flex:1; }
+  .primary-btn:hover { background:var(--blue-800); }
+  .ghost-btn { background:var(--blue-50); color:var(--blue-800); border:1px solid var(--border); }
+  .ghost-btn:hover { border-color:var(--border-md); background:#fff; }
+  .danger-btn { background:var(--danger-bg); color:var(--danger); }
+  .back-btn { background:rgba(255,255,255,.1); color:#fff; border:1px solid rgba(255,255,255,.18); }
+  .back-btn:hover { background:rgba(255,255,255,.18); }
+  .pond-form-card {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:var(--radius); padding:18px; box-shadow:var(--shadow-sm);
+  }
+  .pond-form-card h3 { font-size:14px; margin-bottom:4px; }
+  .pond-form-card p { font-size:11px; color:var(--text-dim); font-family:var(--font-mono); margin-bottom:14px; }
+  .form-field { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
+  .form-field label { font-size:10px; font-weight:700; color:var(--text-sec); text-transform:uppercase; letter-spacing:1px; }
+  .form-field input {
+    border:1px solid var(--border); border-radius:10px; padding:10px 12px;
+    font-family:var(--font-mono); color:var(--text); outline:none;
+  }
+  .form-field input:focus { border-color:var(--blue-400); box-shadow:0 0 0 3px rgba(55,138,221,.12); }
+  .form-error { font-size:11px; color:var(--danger); font-family:var(--font-mono); margin-bottom:10px; }
+  .empty-pond {
+    background:var(--card); border:1px dashed var(--border-md); border-radius:var(--radius);
+    padding:28px; color:var(--text-dim); font-family:var(--font-mono); text-align:center;
+  }
+  @media (max-width:900px) {
+    .overview-hero, .overview-layout { grid-template-columns:1fr; flex-direction:column; }
+    .overview-layout { display:flex; flex-direction:column; }
+    .pond-form-card { width:100%; }
+  }
+
   /* Footer */
   .footer {
     text-align:center; padding:14px 0;
@@ -478,8 +581,226 @@ function AlertRow({ level, msg, time }) {
   );
 }
 
-// ── App ───────────────────────────────────────────────────────────
 export default function App() {
+  const [ponds, setPonds] = useState(loadPonds);
+  const [selectedPondId, setSelectedPondId] = useState(null);
+
+  useEffect(() => {
+    localStorage.setItem(PONDS_STORAGE_KEY, JSON.stringify(ponds));
+  }, [ponds]);
+
+  const handleAddPond = useCallback((rawPond) => {
+    const name = String(rawPond?.name ?? "").trim();
+    const esp32Id = String(rawPond?.esp32Id ?? "").trim();
+
+    if (!name || !esp32Id) {
+      return "Vui lòng nhập đủ tên ao và mã ESP32.";
+    }
+
+    if (ponds.some(pond => pond.esp32Id.toLowerCase() === esp32Id.toLowerCase())) {
+      return "Mã ESP32 này đã được gán cho một ao khác.";
+    }
+
+    setPonds(prev => [
+      ...prev,
+      {
+        id: `${esp32Id}-${Date.now()}`,
+        name,
+        esp32Id,
+      },
+    ]);
+    return "";
+  }, [ponds]);
+
+  const handleRemovePond = useCallback((pondId) => {
+    setPonds(prev => prev.filter(pond => pond.id !== pondId));
+    setSelectedPondId(current => current === pondId ? null : current);
+  }, []);
+
+  const selectedPond = ponds.find(pond => pond.id === selectedPondId);
+
+  if (selectedPond) {
+    return (
+      <PondDetail
+        key={selectedPond.id}
+        pond={selectedPond}
+        onBack={() => setSelectedPondId(null)}
+      />
+    );
+  }
+
+  return (
+    <PondOverview
+      ponds={ponds}
+      onAddPond={handleAddPond}
+      onOpenPond={setSelectedPondId}
+      onRemovePond={handleRemovePond}
+    />
+  );
+}
+
+function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
+  const [form, setForm] = useState({ name: "", esp32Id: "" });
+  const [formError, setFormError] = useState("");
+  const [devices, setDevices] = useState([]);
+  const [backendOk, setBackendOk] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    api.health()
+      .then(ok => mounted && setBackendOk(ok))
+      .catch(() => mounted && setBackendOk(false));
+
+    api.listDevices()
+      .then(data => mounted && setDevices(data))
+      .catch(() => mounted && setDevices([]));
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleSubmit = event => {
+    event.preventDefault();
+    const error = onAddPond(form);
+    if (error) {
+      setFormError(error);
+      return;
+    }
+    setForm({ name: "", esp32Id: "" });
+    setFormError("");
+  };
+
+  const registeredCount = ponds.filter(pond =>
+    devices.some(device => device.device_id === pond.esp32Id)
+  ).length;
+
+  return (
+    <>
+      <style>{CSS}</style>
+      <div className="overview-shell">
+        <div className="overview-main">
+          <section className="overview-hero">
+            <div>
+              <h1>Tổng quan hệ thống ao nuôi</h1>
+              <p>
+                Quản lý nhiều ao theo mã ESP32. Chọn “Chi tiết” để mở dashboard cảm biến,
+                biểu đồ và điều khiển thiết bị cho từng ao.
+              </p>
+            </div>
+            <div className="overview-stats">
+              <div className="overview-stat">
+                <strong>{ponds.length}</strong>
+                <span>Tổng ao</span>
+              </div>
+              <div className="overview-stat">
+                <strong>{registeredCount}</strong>
+                <span>ESP32 trong DB</span>
+              </div>
+              <div className="overview-stat">
+                <strong>{backendOk === null ? "…" : backendOk ? "OK" : "OFF"}</strong>
+                <span>Backend</span>
+              </div>
+            </div>
+          </section>
+
+          <div className="overview-layout">
+            <section>
+              <div className="sec-head">
+                <div className="sec-title">Danh sách ao</div>
+                <span className="sec-note">Chọn ao để xem chi tiết</span>
+              </div>
+
+              {ponds.length === 0 ? (
+                <div className="empty-pond">Chưa có ao nào. Hãy thêm ao ở biểu mẫu bên phải.</div>
+              ) : (
+                <div className="pond-grid">
+                  {ponds.map(pond => {
+                    const device = devices.find(d => d.device_id === pond.esp32Id);
+                    return (
+                      <article key={pond.id} className="pond-card">
+                        <div className="pond-top">
+                          <div className="pond-icon">🐟</div>
+                          <div>
+                            <div className="pond-name">{pond.name}</div>
+                            <div className="pond-meta">Mã ESP32 · {pond.esp32Id}</div>
+                          </div>
+                        </div>
+
+                        <div className="pond-info">
+                          <div>
+                            <span>Thiết bị</span>
+                            <strong>{device ? device.name : "Chưa đăng ký"}</strong>
+                          </div>
+                          <div>
+                            <span>Trạng thái</span>
+                            <strong>{device ? device.status : "Chờ dữ liệu"}</strong>
+                          </div>
+                          <div>
+                            <span>Loại</span>
+                            <strong>{device ? device.type : "esp32"}</strong>
+                          </div>
+                          <div>
+                            <span>Cập nhật</span>
+                            <strong>
+                              {device?.last_seen
+                                ? new Date(device.last_seen).toLocaleTimeString("vi-VN")
+                                : "--"}
+                            </strong>
+                          </div>
+                        </div>
+
+                        <div className="pond-actions">
+                          <button className="primary-btn" onClick={() => onOpenPond(pond.id)}>
+                            Chi tiết
+                          </button>
+                          <button className="danger-btn" onClick={() => onRemovePond(pond.id)}>
+                            Xóa
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            <aside className="pond-form-card">
+              <h3>Thêm ao mới</h3>
+              <p>Chỉ cần nhập tên ao và mã ESP32 đang gửi dữ liệu MQTT.</p>
+              <form onSubmit={handleSubmit}>
+                <div className="form-field">
+                  <label>Tên ao</label>
+                  <input
+                    value={form.name}
+                    onChange={event => setForm(prev => ({ ...prev, name: event.target.value }))}
+                    placeholder="VD: Ao cá số 2"
+                  />
+                </div>
+                <div className="form-field">
+                  <label>Mã ESP32</label>
+                  <input
+                    value={form.esp32Id}
+                    onChange={event => setForm(prev => ({ ...prev, esp32Id: event.target.value }))}
+                    placeholder="VD: esp32_2"
+                  />
+                </div>
+                {formError && <div className="form-error">{formError}</div>}
+                <button className="primary-btn" type="submit" style={{ width: "100%" }}>
+                  Thêm ao
+                </button>
+              </form>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────
+function PondDetail({ pond, onBack }) {
   const [devices,       setDevices]      = useState([]);
   const [sensorHistory, setSensorHistory] = useState({});
   const [latest,        setLatest]        = useState({});
@@ -492,8 +813,8 @@ export default function App() {
   const [clock, setClock] = useState(new Date());
   const [nav,   setNav]   = useState(0);
 
-  // Find ESP32 sensor device (type="esp32"), fallback to "esp32_1"
-  const esp32Id = devices.find(d => d.type === "esp32")?.device_id ?? "esp32_1";
+  // Use the ESP32 assigned to the selected pond, fallback to backend device/default.
+  const esp32Id = pond?.esp32Id || devices.find(d => d.type === "esp32")?.device_id || "esp32_1";
 
   // ── Clock ────────────────────────────────────────────────────
   useEffect(() => {
@@ -522,10 +843,11 @@ export default function App() {
 
   // ── Load historical data for each metric on mount ─────────────
   useEffect(() => {
+    setSensorHistory({});
     Object.keys(METRICS).concat(["water_level"]).forEach(metric => {
       api.sensorHistory(metric, 30)
         .then(data => {
-          const pts = [...data].reverse().map(d => ({
+          const pts = [...data].filter(d => d.device_id === esp32Id).reverse().map(d => ({
             t: new Date(d.created_at).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }),
             v: d.value,
           }));
@@ -533,7 +855,7 @@ export default function App() {
         })
         .catch(() => {});
     });
-  }, []);
+  }, [esp32Id]);
 
   // ── Poll latest sensors every 5 s ────────────────────────────
   useEffect(() => {
@@ -645,10 +967,11 @@ export default function App() {
           {/* Topbar */}
           <header className="topbar">
             <div>
-              <h1>Hệ Thống Giám Sát Nuôi Trồng Thủy Sản</h1>
+              <h1>Chi tiết {pond?.name || "ao nuôi"}</h1>
               <p>{clock.toLocaleString("vi-VN")} · {esp32Id} · MQTT · MySQL</p>
             </div>
             <div className="topbar-right">
+              <button className="back-btn" onClick={onBack}>← Tổng quan</button>
               <div className="live-pill">
                 <div
                   className="live-dot"
