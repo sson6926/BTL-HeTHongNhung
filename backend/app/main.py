@@ -4,6 +4,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.actuators import router as actuators_router
 from app.api.devices import router as devices_router
 from app.api.sensors import router as sensors_router
 from app.db.session import init_db
@@ -67,6 +68,7 @@ async def shutdown() -> None:
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
+app.include_router(actuators_router, prefix="/actuators", tags=["actuators"])
 app.include_router(devices_router, prefix="/devices", tags=["devices"])
 app.include_router(sensors_router, prefix="/sensors", tags=["sensors"])
 
