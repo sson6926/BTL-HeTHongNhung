@@ -64,6 +64,21 @@ async def get_device(device_id: str, db: DbDep):
     return device
 
 
+@router.put("/{device_id}/pond_type", response_model=DeviceResponse, summary="Change pond type and reseed thresholds")
+async def change_pond_type(device_id: str, body: dict, db: DbDep):
+    """Cập nhật pond_type và ghi đè ngưỡng theo loại ao mới."""
+    pond_type = body.get("pond_type", "generic")
+    device = await device_service.get_device_by_id(db, device_id)
+    if device is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Device '{device_id}' not found.")
+    device.pond_type = pond_type
+    await db.flush()
+    await threshold_service.reseed_thresholds(db, device_id, pond_type)
+    await db.commit()
+    await db.refresh(device)
+    return device
+
+
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a device")
 async def delete_device(device_id: str, db: DbDep):
     """Delete a device record when a pond is removed."""

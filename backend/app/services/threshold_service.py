@@ -125,3 +125,33 @@ async def seed_default_thresholds(
         )
 
     return seeded
+
+
+async def reseed_thresholds(
+    db: AsyncSession,
+    device_id: str,
+    pond_type: str = "generic",
+) -> list[SensorThreshold]:
+    """
+    Ghi đè toàn bộ ngưỡng theo loại ao mới.
+    Dùng khi user đổi pond_type.
+    """
+    from app.core.thresholds import DEFAULT_THRESHOLDS
+
+    templates = DEFAULT_THRESHOLDS.get(pond_type, DEFAULT_THRESHOLDS["generic"])
+    result = []
+
+    for tpl in templates:
+        record = await upsert_threshold(db, device_id, tpl.metric_type, {
+            "min_value":      tpl.min_value,
+            "max_value":      tpl.max_value,
+            "unit":           tpl.unit,
+            "action_target":  tpl.action_target,
+            "action_command": tpl.action_command,
+            "auto_action":    tpl.auto_action,
+        })
+        result.append(record)
+
+    await db.commit()
+    logger.info("Reseeded %d thresholds for device=%s pond_type=%s", len(result), device_id, pond_type)
+    return result

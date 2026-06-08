@@ -28,6 +28,11 @@ const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ device_id: deviceId, type: "esp32", status: "OFF", ...payload }),
   }),
+  changePondType: (deviceId, pond_type) => apiFetch(`/devices/${encodeURIComponent(deviceId)}/pond_type`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pond_type }),
+  }),
   deleteDevice:  (deviceId)            => fetch(`${API}/devices/${encodeURIComponent(deviceId)}`, {
     method: "DELETE",
   }).then(async res => {
@@ -631,6 +636,18 @@ function PondDetail({ pond, onBack }) {
       .catch(e => pushAlert("error", `Khong the tai thiết bị: ${e.message}`));
   }, []);
 
+  // ── Load thresholds khi vào (dùng cho màu sensor card) ──────
+  useEffect(() => {
+    api.getThresholds(esp32Id)
+      .then(data => {
+        setThresholds(data);
+        const edits = {};
+        data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_control ?? false, auto_action: t.auto_action ?? "" }; });
+        setThreshEdits(edits);
+      })
+      .catch(() => {});
+  }, [esp32Id]);
+
   // ── Load thresholds when on nav 2 ─────────────────────────────
   useEffect(() => {
     if (nav !== 2) return;
@@ -649,7 +666,9 @@ function PondDetail({ pond, onBack }) {
     if (devices.length === 0) return;
     const device = devices.find(d => d.device_id === esp32Id);
     if (device?.pond_type) {
-      setPondEdit(prev => ({ ...prev, pond_type: device.pond_type }));
+      const legacyMap = { catfish: "ca_tra", shrimp: "tom_su", tilapia: "ca_ro_phi", carp: "ca_chep", pangasius: "ca_tra" };
+      const pt = legacyMap[device.pond_type] || device.pond_type;
+      setPondEdit(prev => ({ ...prev, pond_type: pt }));
     }
   }, [devices, esp32Id]);
 
@@ -746,7 +765,6 @@ function PondDetail({ pond, onBack }) {
   const handleSavePond = async () => {
     setSavingPond(true); setPondSaveMsg(""); setPondSaveErr(false);
     try {
-      // validate: mã ESP32 mới không được trùng ao khác (kiểm tra qua listDevices)
       if (pondEdit.device_id !== esp32Id) {
         const allDevices = await api.listDevices();
         if (allDevices.some(d => d.device_id === pondEdit.device_id)) {
@@ -756,10 +774,18 @@ function PondDetail({ pond, onBack }) {
           return;
         }
       }
-      await api.updateDevice(pondEdit.device_id, { name: pondEdit.name, location: pondEdit.name, pond_type: pondEdit.pond_type });
+      // Lưu thông tin + reseed ngưỡng theo loại mới
+      await api.updateDevice(esp32Id, { name: pondEdit.name, location: pondEdit.name, pond_type: pondEdit.pond_type });
+      await api.changePondType(esp32Id, pondEdit.pond_type);      // Reload thresholds
+      const data = await api.getThresholds(esp32Id);
+      setThresholds(data);
+      const edits = {};
+      data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_control ?? false, auto_action: t.auto_action ?? "" }; });
+      setThreshEdits(edits);
       setPondSaveMsg("Lưu thông tin ao thành công!");
     } catch (e) {
-      setPondSaveMsg("Lỗi: " + e.message);
+      console.error("handleSavePond error:", e);
+      setPondSaveMsg("Lỗi: " + (e.message || JSON.stringify(e)));
       setPondSaveErr(true);
     } finally {
       setSavingPond(false);
@@ -795,11 +821,21 @@ function PondDetail({ pond, onBack }) {
   const wlRaw = latest.water_level ?? null;
   const wl    = waterLevelPct(wlRaw);
 
+  // Lấy ngưỡng từ DB, fallback về METRICS hardcode
+  const getThreshLo = (metric) => {
+    const t = thresholds.find(t => t.metric_type === metric);
+    return t?.min_value ?? METRICS[metric]?.lo ?? null;
+  };
+  const getThreshHi = (metric) => {
+    const t = thresholds.find(t => t.metric_type === metric);
+    return t?.max_value ?? METRICS[metric]?.hi ?? null;
+  };
+
   const actuators = CONTROL_TARGETS.map(t => ({ ...t, device_id: t.target, status: targetStatus[t.target] ?? "OFF" }));
   const feeder    = { ...FEEDER_TARGET, device_id: FEEDER_TARGET.target, status: targetStatus[FEEDER_TARGET.target] ?? "OFF" };
   const controllableCount = actuators.length + 1;
 
-  const critSts = ["o2", "ph", "nh3"].map(m => statusOf(latest[m], METRICS[m].lo, METRICS[m].hi));
+  const critSts = ["o2", "ph", "nh3"].map(m => statusOf(latest[m], getThreshLo(m), getThreshHi(m)));
   const sys     = critSts.some(s => s === "danger") ? "err" : critSts.some(s => s === "warning") ? "warn" : "ok";
   const sysLabel = { ok: "HỆ THỐNG ỔN ĐỊNH", warn: "CÓ CẢNH BÁO", err: "NGUY HIỂM" }[sys];
 
@@ -877,7 +913,7 @@ function PondDetail({ pond, onBack }) {
                 <div className="sensor-grid">
                   {SENSOR_ORDER.map(m => {
                     const cfg = METRICS[m];
-                    return <SCard key={m} icon={cfg.icon} label={cfg.label} value={latest[m]} unit={cfg.unit} lo={cfg.lo} hi={cfg.hi} history={sensorHistory[m]} />;
+                    return <SCard key={m} icon={cfg.icon} label={cfg.label} value={latest[m]} unit={cfg.unit} lo={getThreshLo(m)} hi={getThreshHi(m)} history={sensorHistory[m]} />;
                   })}
                 </div>
               </div>
