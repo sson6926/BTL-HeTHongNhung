@@ -179,16 +179,12 @@ class MQTTClient:
     ) -> None:
         """Lưu tất cả metric từ 1 MQTT message vào DB với cùng timestamp."""
         from app.db.session import AsyncSessionLocal
-        from app.services import sensor_service, device_service, rule_engine
+        from app.services import device_service, rule_engine, sensor_service
 
         async with AsyncSessionLocal() as db:
             try:
-<<<<<<< HEAD
                 await device_service.ensure_esp32_device(db, device_id)
-                await sensor_service.save_sensor_data(db, device_id, metric_type, value)
-=======
                 await sensor_service.save_all_sensor_data(db, device_id, metrics)
->>>>>>> f3d18dd5ad90f0a6fa402a7de0f64107a251a204
                 await device_service.update_last_seen(db, device_id)
                 await rule_engine.evaluate_rules(db, device_id, metrics)
                 await db.commit()

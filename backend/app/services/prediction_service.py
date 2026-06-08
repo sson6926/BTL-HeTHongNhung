@@ -55,6 +55,7 @@ class PredictionService:
         self._scaler: Any | None = None
         self._device: torch.device = torch.device("cpu")
         self._loaded: bool = False
+        self._lookback: int = settings.ML_LOOKBACK
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -109,6 +110,10 @@ class PredictionService:
     @property
     def is_ready(self) -> bool:
         return self._loaded
+
+    @property
+    def lookback(self) -> int:
+        return self._lookback
 
     # ------------------------------------------------------------------
     # Inference
