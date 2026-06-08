@@ -5,33 +5,23 @@ import numpy as np
 import pickle
 import torch
 
-from model import WaterQualityLSTM
+from model import WaterQualityLSTM, WaterQualityGRU, WaterQualitySeq2Seq
 from preprocess import preprocess_and_resample
-from predict import forecast_future
+from predict import load_model, predict
 
-def run_simulation(speed_seconds=2.0):
+def run_simulation(model_name="lstm", speed_seconds=2.0):
     """
     Simulates a live IoT stream in fast-forward mode.
     Every `speed_seconds` real-time seconds, 1 hour of simulated time passes.
-    The LSTM model uses the sliding window of the last 24 hours to forecast the next 12 hours.
+    The model uses the sliding window of the last 24 hours to forecast the next 12 hours.
     """
-    # 1. Load weights and scaler
-    model_path = "../artifacts/lstm_water_quality.pth"
-    scaler_path = "../artifacts/scaler.pkl"
-    
-    if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-        print("Error: Trained model assets not found! Please run train.py first.")
+    # 1. Load weights and scaler using predict.py utility
+    try:
+        model, scaler, device = load_model(model_name=model_name)
+    except FileNotFoundError as e:
+        print(e)
         return
         
-    with open(scaler_path, "rb") as f:
-        scaler = pickle.load(f)
-        
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = WaterQualityLSTM(input_size=3, hidden_size=64, num_layers=2, output_size=3, dropout=0.2)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.to(device)
-    model.eval()
-    
     # 2. Load resampled data
     df_resampled = preprocess_and_resample()
     
@@ -42,6 +32,7 @@ def run_simulation(speed_seconds=2.0):
     
     print("\n" + "="*60)
     print("🚀 KHỞI CHẠY HỆ THỐNG GIẢ LẬP TUA NHANH THỜI GIAN (IoT SIMULATOR)")
+    print(f"Mô hình sử dụng: {model_name.upper()}")
     print(f"Tần suất mô phỏng: 1 giờ dữ liệu = {speed_seconds} giây thực tế.")
     print("="*60)
     time.sleep(2)
@@ -62,18 +53,18 @@ def run_simulation(speed_seconds=2.0):
             temp_now = curr_val['water_temp']
             
             # 3. Forecast the next 12 steps
-            future_vals = forecast_future(model, scaler, device, current_window.values, steps=forecast_steps)
+            future_vals = predict(model, scaler, device, current_window.values, steps=forecast_steps, model_name=model_name)
             
             # Print beautiful ASCII Dashboard
             print("┌" + "─"*58 + "┐")
-            print(f"│  📡 THỜI GIAN GIẢ LẬP (IoT): {current_time.strftime('%Y-%m-%d %H:%M:%S')}  │")
+            print(f"│  │📡 THỜI GIAN GIẢ LẬP (IoT): {current_time.strftime('%Y-%m-%d %H:%M:%S')}  │")
             print("├" + "─"*58 + "┤")
             print("│  📊 CHỈ SỐ CẢM BIẾN HIỆN TẠI (REAL-TIME SENSORS):        │")
             print(f"│    - pH Nước (water_pH):    {pH_now:.2f}                         │")
             print(f"│    - Độ sạch (TDS):         {TDS_now:.1f} ppm                    │")
             print(f"│    - Nhiệt độ (water_temp): {temp_now:.2f} °C                   │")
             print("├" + "─"*58 + "┤")
-            print("│  🔮 DỰ BÁO TỪ LSTM CHO 6 GIỜ TIẾP THEO (FORECAST):       │")
+            print(f"│  🔮 DỰ BÁO TỪ {model_name.upper()} CHO 6 GIỜ TIẾP THEO (FORECAST):       │")
             
             for step in range(6):
                 pred_hour = current_time + pd.Timedelta(hours=step + 1)
@@ -92,4 +83,12 @@ def run_simulation(speed_seconds=2.0):
         print("\n\n🛑 Đã dừng chương trình mô phỏng IoT.")
 
 if __name__ == "__main__":
-    run_simulation(speed_seconds=2.0)
+    import argparse
+    parser = argparse.ArgumentParser(description="Run IoT water quality simulation.")
+    parser.add_argument("--model", type=str, default="lstm", choices=["lstm", "gru", "seq2seq", "xgboost"],
+                        help="Model to use in simulation (lstm, gru, seq2seq, xgboost)")
+    parser.add_argument("--speed", type=float, default=2.0, help="Simulation speed in seconds per hour")
+    args = parser.parse_args()
+    
+    run_simulation(model_name=args.model, speed_seconds=args.speed)
+

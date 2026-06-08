@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import os
 
-def preprocess_and_resample(file_path="../dataset/pond_iot_2023.csv", freq="1h"):
+def preprocess_and_resample(file_path="../dataset/train.csv", freq="1h"):
     """
     Loads the dataset, parses timestamps, resamples to a fixed frequency (freq),
     interpolates gaps, and returns a clean DataFrame.
