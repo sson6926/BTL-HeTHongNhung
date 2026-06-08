@@ -1,19 +1,13 @@
 import logging
 from typing import Annotated
 
-# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status
-# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.mqtt.client import mqtt_client
-from app.schemas.device import DeviceCreate, DeviceResponse, ControlRequest, ControlResponse
-<<<<<<< HEAD
-from app.services import device_service
-=======
+from app.schemas.device import ControlRequest, ControlResponse, DeviceCreate, DeviceResponse
 from app.services import device_service, threshold_service
->>>>>>> f3d18dd5ad90f0a6fa402a7de0f64107a251a204
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +20,7 @@ DbDep = Annotated[AsyncSession, Depends(get_db)]
 async def list_devices(db: DbDep):
     """Return all registered devices."""
     try:
-        devices = await device_service.get_all_devices(db)
-        return devices
+        return await device_service.get_all_devices(db)
     except Exception as exc:
         logger.exception("Failed to list devices: %s", exc)
         raise HTTPException(
@@ -36,52 +29,27 @@ async def list_devices(db: DbDep):
         ) from exc
 
 
-<<<<<<< HEAD
-@router.post("/", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED, summary="Create or update a device")
+@router.post(
+    "/",
+    response_model=DeviceResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create or update a device",
+)
 async def create_device(body: DeviceCreate, db: DbDep):
-    """Create a device record from the pond registration form."""
+    """Create/update a device from the pond form and optionally seed default thresholds."""
     try:
-        return await device_service.create_or_update_device(db, body)
+        device = await device_service.create_or_update_device(db, body)
+        if body.pond_type:
+            await threshold_service.seed_default_thresholds(
+                db, device.device_id, pond_type=body.pond_type
+            )
+        return device
     except Exception as exc:
         logger.exception("Failed to create device %s: %s", body.device_id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create device '{body.device_id}'.",
         ) from exc
-=======
-@router.post(
-    "/",
-    response_model=DeviceResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Tạo device mới và seed ngưỡng mặc định theo loại ao",
-)
-async def create_device(body: DeviceCreate, db: DbDep):
-    """
-    Tạo device mới. Nếu `pond_type` được cung cấp, tự động seed
-    ngưỡng cảnh báo mặc định cho thiết bị đó.
-    """
-    existing = await device_service.get_device_by_id(db, body.device_id)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Device '{body.device_id}' already exists.",
-        )
-
-    device = await device_service.create_device(db, body.model_dump())
-
-    if body.pond_type:
-        await threshold_service.seed_default_thresholds(
-            db, device.device_id, pond_type=body.pond_type
-        )
-        logger.info(
-            "Seeded thresholds for new device=%s pond_type=%s",
-            device.device_id, body.pond_type,
-        )
-
-    await db.commit()
-    await db.refresh(device)
-    return device
->>>>>>> f3d18dd5ad90f0a6fa402a7de0f64107a251a204
 
 
 @router.get("/{device_id}", response_model=DeviceResponse, summary="Get a single device")
@@ -114,26 +82,22 @@ async def delete_device(device_id: str, db: DbDep):
 )
 async def control_device(device_id: str, body: ControlRequest, db: DbDep):
     """
-    Publish a control command via MQTT, update device status (for ON/OFF),
+    Publish a control command via MQTT, update device status for ON/OFF,
     and log the action to device_history.
     """
-    # Ensure the ESP32 controller exists before sending target commands to it.
     await device_service.ensure_esp32_device(db, device_id)
 
     target = body.target
     action = body.action
 
     try:
-        # Build and publish MQTT command with target + action
         payload = {"target": target, "action": action}
         mqtt_client.publish(f"control/{device_id}", payload)
         logger.info("Published control command to control/%s: %s", device_id, payload)
 
-        # Update device status only for ON/OFF actions
         if action in ("ON", "OFF"):
             await device_service.update_device_status(db, device_id, action)
 
-        # Log to device_history including target
         await device_service.log_device_history(
             db=db,
             device_id=device_id,
@@ -153,7 +117,6 @@ async def control_device(device_id: str, body: ControlRequest, db: DbDep):
 
     except Exception as exc:
         logger.exception("Failed to control device %s: %s", device_id, exc)
-        # Attempt to log failure
         try:
             await device_service.log_device_history(
                 db=db,

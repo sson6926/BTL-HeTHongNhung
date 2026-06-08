@@ -8,9 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 # pyrefly: ignore [missing-import]
-from app.schemas.sensor_data import SensorDataResponse, LatestSensorResponse, WaterMetricsResponse
+from app.schemas.sensor_data import (
+    LatestSensorResponse,
+    SensorDataResponse,
+    WaterMetricsResponse,
+    WaterQualityForecastResponse,
+)
 # pyrefly: ignore [missing-import]
 from app.services import sensor_service
+from app.services.prediction_service import prediction_service
 
 logger = logging.getLogger(__name__)
 
@@ -94,4 +100,52 @@ async def get_water_metrics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve water metrics.",
+        ) from exc
+
+
+@router.get(
+    "/predict",
+    response_model=WaterQualityForecastResponse,
+    summary="Forecast water quality with the LSTM AI model",
+)
+async def predict_water_quality(
+    db: DbDep,
+    device_id: str = Query(..., description="The ESP32 device_id to forecast"),
+    steps: int = Query(12, ge=1, le=168, description="Number of future hourly steps"),
+):
+    """Return future pH, TDS, and water temperature values from the trained LSTM model."""
+    if not prediction_service.is_ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI prediction model is not loaded.",
+        )
+
+    try:
+        recent_data, last_timestamp = await sensor_service.get_recent_water_metrics_for_prediction(
+            db,
+            device_id=device_id,
+            lookback=prediction_service.lookback,
+        )
+        forecasts = prediction_service.predict(
+            recent_data,
+            steps=steps,
+            last_timestamp=last_timestamp,
+        )
+        return WaterQualityForecastResponse(
+            device_id=device_id,
+            generated_at=last_timestamp,
+            input_points=len(recent_data),
+            forecast_steps=steps,
+            forecasts=forecasts,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception("Failed to run AI prediction for device %s: %s", device_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to run AI prediction.",
         ) from exc

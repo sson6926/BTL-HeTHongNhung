@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -46,4 +47,18 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        result = await conn.execute(
+            text(
+                """
+                SELECT COUNT(*) AS column_count
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = :db_name
+                  AND TABLE_NAME = 'devices'
+                  AND COLUMN_NAME = 'pond_type'
+                """
+            ),
+            {"db_name": settings.DB_NAME},
+        )
+        if result.scalar_one() == 0:
+            await conn.execute(text("ALTER TABLE devices ADD COLUMN pond_type VARCHAR(20) NULL"))
     logger.info("Database tables created/verified successfully.")
