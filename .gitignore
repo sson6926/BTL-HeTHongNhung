@@ -70,3 +70,10 @@ htmlcov/
 # =========================
 .mypy_cache/
 .dmypy.json
+
+# =========================
+# Node / Frontend
+# =========================
+node_modules/
+package-lock.json
+frontend/dist/

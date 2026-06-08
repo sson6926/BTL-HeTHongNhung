@@ -36,6 +36,8 @@ async def create_or_update_device(db: AsyncSession, body: DeviceCreate) -> Devic
         device.name = body.name
         device.location = body.location
         device.type = body.type
+        if body.pond_type is not None:
+            device.pond_type = body.pond_type
         device.updated_at = datetime.now(timezone.utc)
     else:
         device = Device(
@@ -44,6 +46,7 @@ async def create_or_update_device(db: AsyncSession, body: DeviceCreate) -> Devic
             type=body.type,
             status="OFF",
             location=body.location,
+            pond_type=body.pond_type,
         )
         db.add(device)
     await db.flush()
