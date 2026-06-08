@@ -89,6 +89,8 @@ class MQTTClient:
             # Subscribe to bulk sensor topic: sensor/{device_id}/all
             client.subscribe("sensor/+/all", qos=1)
             logger.info("Subscribed to sensor/+/all")
+            client.subscribe("status/+", qos=1)
+            logger.info("Subscribed to status/+")
         else:
             logger.error("MQTT connection failed with return code %s", rc)
 
@@ -124,6 +126,20 @@ class MQTTClient:
         topic = msg.topic
         try:
             parts = topic.split("/")
+
+            # ── status/{device_id} từ Arduino ────────────────────────────
+            if len(parts) == 2 and parts[0] == "status":
+                device_id = parts[1]
+                data = json.loads(msg.payload.decode("utf-8"))
+                target = data.get("target")
+                action = data.get("action")
+                if target and action and self._loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self._log_status(device_id, target, action),
+                        self._loop,
+                    )
+                return
+
             if len(parts) != 3 or parts[0] != "sensor" or parts[2] != "all":
                 logger.warning("Unexpected topic format: %s", topic)
                 return
@@ -171,6 +187,23 @@ class MQTTClient:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _log_status(self, device_id: str, target: str, action: str) -> None:
+        """Lưu trạng thái thiết bị từ Arduino vào device_history để FE poll."""
+        from app.db.session import AsyncSessionLocal
+        from app.services import device_service
+        async with AsyncSessionLocal() as db:
+            try:
+                await device_service.log_device_history(
+                    db=db, device_id=device_id, action=action,
+                    target=target, status="success", source="api",
+                    note=f"Status update from Arduino: {target}={action}",
+                )
+                await db.commit()
+                logger.info("STATUS | device=%s %s=%s", device_id, target, action)
+            except Exception as exc:
+                await db.rollback()
+                logger.error("Failed to log status for device=%s: %s", device_id, exc)
 
     async def _persist_all_sensor_data(
         self,

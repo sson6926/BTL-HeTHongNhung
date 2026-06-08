@@ -1,4 +1,5 @@
 import logging
+import time
 
 # pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services import threshold_service, device_service
 
 logger = logging.getLogger(__name__)
+
+# Debounce: lưu thời điểm cuối cùng gửi từng action per device+metric
+# key: (device_id, metric_type, action) → timestamp
+_last_action_time: dict[tuple, float] = {}
+DEBOUNCE_SECONDS = 120.0  # không gửi lại CHANGE_WATER trong 120s
 
 
 async def evaluate_rules(
@@ -75,16 +81,24 @@ async def evaluate_rules(
             # Với CHANGE_WATER (nh3): truyền thêm ngưỡng water_level vào payload
             payload: dict = {"target": act_target, "action": act_command}
             if act_command == "CHANGE_WATER":
+                # Debounce: không gửi lại trong DEBOUNCE_SECONDS
+                debounce_key = (device_id, threshold.metric_type, act_command)
+                now = time.time()
+                last = _last_action_time.get(debounce_key, 0)
+                if now - last < DEBOUNCE_SECONDS:
+                    remaining = int(DEBOUNCE_SECONDS - (now - last))
+                    logger.info("DEBOUNCE | device=%s %s skipped, cooldown %ds left",
+                        device_id, act_command, remaining)
+                    continue
+                _last_action_time[debounce_key] = now
+
                 wl_thresh = next((t for t in thresholds if t.metric_type == "water_level"), None)
                 if wl_thresh and wl_thresh.auto_action:
-                    # water_level auto bật → dùng ngưỡng của nó
                     payload["wl_drain_target"] = wl_thresh.min_value or 25.0
                     payload["wl_fill_target"]  = wl_thresh.max_value or 80.0
                 else:
-                    # water_level auto tắt → dùng mặc định
                     payload["wl_drain_target"] = 25.0
                     payload["wl_fill_target"]  = 80.0
-                # Ghi history cho cả pump_drain và pump_fill để FE hiển thị đang hoạt động
                 await device_service.log_device_history(db=db, device_id=device_id, action="ON",
                     target="pump_drain", status="success", source="schedule", note="CHANGE_WATER: draining")
                 await device_service.log_device_history(db=db, device_id=device_id, action="ON",
