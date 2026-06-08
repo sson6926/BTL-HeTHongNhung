@@ -455,10 +455,6 @@ function FeederCard({ device, onControl, busy }) {
           <div className="d-id">{device.device_id}</div>
         </div>
       </div>
-      <div className="stats-row">
-        <div className="stat-box"><div className="v">3</div><div className="l">Lan/ngay</div></div>
-        <div className="stat-box"><div className="v">08:00</div><div className="l">Lan toi</div></div>
-      </div>
       <button className="feed-btn" onClick={() => onControl(device.device_id, "FEED")} disabled={busy}>
         {busy ? "⏳ Đang cho ăn…" : "🐟 Cho ăn ngay"}
       </button>
@@ -605,9 +601,9 @@ function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
                         </div>
                         <div className="pond-info">
                           <div><span>Loại nuôi trồng</span><strong>{ptInfo.label}</strong></div>
-                          <div><span>Trạng thái</span><strong>{device ? device.status : "Chờ dữ liệu"}</strong></div>
+                          <div><span>Kết nối</span><strong style={{ color: device?.last_seen ? "var(--ok)" : "var(--text-dim)" }}>{device?.last_seen ? "Đang hoạt động" : "Chưa kết nối"}</strong></div>
                           <div><span>Mã thiết bị</span><strong>{pond.esp32Id}</strong></div>
-                          <div><span>Cập nhật</span><strong>{device?.last_seen ? new Date(device.last_seen).toLocaleTimeString("vi-VN") : "--"}</strong></div>
+                          <div><span>Nhận dữ liệu lúc</span><strong>{device?.last_seen ? new Date(device.last_seen).toLocaleTimeString("vi-VN") : "--"}</strong></div>
                         </div>
                         <div className="pond-actions">
                           <button className="primary-btn" onClick={() => onOpenPond(pond.id)}>Chi tiết</button>
@@ -937,7 +933,6 @@ function PondDetail({ pond, onBack }) {
     { icon: "📊", title: "Phân tích & Chẩn đoán" },
     { icon: "⚙️", title: "Ngưỡng cảnh báo" },
     { icon: "📋", title: "Lịch sử" },
-    { icon: "🤖", title: "Cơ chế tự động" },
   ];
 
   const currentPondType = pondEdit.pond_type || "generic";
