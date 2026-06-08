@@ -50,6 +50,7 @@ const api = {
     body: JSON.stringify({ target, action }),
   }),
   getThresholds: (deviceId)            => apiFetch(`/devices/${encodeURIComponent(deviceId)}/thresholds`),
+  getDeviceStatus: (deviceId)          => apiFetch(`/devices/${encodeURIComponent(deviceId)}/status`),
   updateThreshold: (deviceId, metric, payload) => apiFetch(`/devices/${encodeURIComponent(deviceId)}/thresholds/${metric}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -642,7 +643,7 @@ function PondDetail({ pond, onBack }) {
       .then(data => {
         setThresholds(data);
         const edits = {};
-        data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_control ?? false, auto_action: t.auto_action ?? "" }; });
+        data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_action ?? false, action_target: t.action_target || null, action_command: t.action_command || null }; });
         setThreshEdits(edits);
       })
       .catch(() => {});
@@ -655,7 +656,7 @@ function PondDetail({ pond, onBack }) {
       .then(data => {
         setThresholds(data);
         const edits = {};
-        data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_control ?? false, auto_action: t.auto_action ?? "" }; });
+        data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_action ?? false, action_target: t.action_target || null, action_command: t.action_command || null }; });
         setThreshEdits(edits);
       })
       .catch(() => {});
@@ -710,6 +711,13 @@ function PondDetail({ pond, onBack }) {
         setLatest(newLatest);
         setConnected(true);
         setLastPoll(new Date());
+
+        // Đồng bộ trạng thái thiết bị từ DB
+        api.getDeviceStatus(esp32Id)
+          .then(statusMap => {
+            setTargetStatus(prev => ({ ...prev, ...statusMap }));
+          })
+          .catch(() => {});
         setSensorHistory(h => {
           const nh = { ...h };
           data.forEach(d => {
@@ -780,7 +788,7 @@ function PondDetail({ pond, onBack }) {
       const data = await api.getThresholds(esp32Id);
       setThresholds(data);
       const edits = {};
-      data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_control ?? false, auto_action: t.auto_action ?? "" }; });
+      data.forEach(t => { edits[t.metric_type] = { min_value: t.min_value, max_value: t.max_value, auto_control: t.auto_action ?? false, action_target: t.action_target || null, action_command: t.action_command || null }; });
       setThreshEdits(edits);
       setPondSaveMsg("Lưu thông tin ao thành công!");
     } catch (e) {
@@ -798,14 +806,16 @@ function PondDetail({ pond, onBack }) {
     setSavingThresh(true); setThreshSaveMsg(""); setThreshSaveErr(false);
     try {
       await Promise.all(
-        Object.entries(threshEdits).map(([metric, vals]) =>
-          api.updateThreshold(esp32Id, metric, {
-            min_value: parseFloat(vals.min_value),
-            max_value: parseFloat(vals.max_value),
-            auto_control: vals.auto_control,
-            auto_action: vals.auto_action,
-          })
-        )
+        Object.entries(threshEdits).map(([metric, vals]) => {
+          const hasAction = !!(vals.action_target && vals.action_command);
+          return api.updateThreshold(esp32Id, metric, {
+            min_value: vals.min_value != null && vals.min_value !== "" ? parseFloat(vals.min_value) : null,
+            max_value: vals.max_value != null && vals.max_value !== "" ? parseFloat(vals.max_value) : null,
+            auto_action: hasAction ? !!(vals.auto_control) : false,
+            action_target: vals.action_target || null,
+            action_command: vals.action_command || null,
+          });
+        })
       );
       setThreshSaveMsg("Lưu ngưỡng cảnh báo thành công!");
     } catch (e) {
@@ -1116,7 +1126,18 @@ function PondDetail({ pond, onBack }) {
                     ) : thresholds.map(t => {
                       const edit = threshEdits[t.metric_type] || {};
                       const m = METRICS[t.metric_type];
-                      const actionLabels = { "": "Không làm gì", "FEED": "Cho ăn", "CHANGE_WATER": "Thay nước", "RESET": "Khởi động lại" };
+                      const actionOptions = [
+                        { value: "",                       label: "Không làm gì" },
+                        { value: "oxygen|ON",              label: "Bật máy sục oxy" },
+                        { value: "pump_fill|ON",           label: "Bật máy bơm cấp" },
+                        { value: "pump_drain|CHANGE_WATER",label: "Thay nước (xả + cấp)" },
+                        { value: "feeder|FEED",            label: "Cho ăn" },
+                        { value: "esp32|RESET",            label: "Khởi động lại ESP32" },
+                      ];
+                      // Ghép target|command thành 1 giá trị để hiển thị trong select
+                      const currentAction = edit.action_target && edit.action_command
+                        ? `${edit.action_target}|${edit.action_command}`
+                        : "";
                       return (
                         <tr key={t.metric_type}>
                           <td style={{ fontWeight: 600 }}>{m ? `${m.icon} ${m.label}` : t.metric_type}</td>
@@ -1128,16 +1149,18 @@ function PondDetail({ pond, onBack }) {
                             <input className="thresh-input" type="number" step="0.1" value={edit.max_value ?? t.max_value}
                               onChange={e => setThreshEdits(prev => ({ ...prev, [t.metric_type]: { ...prev[t.metric_type], max_value: e.target.value } }))} />
                           </td>
-                          <td style={{ fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>{m?.unit ?? ""}</td>
+                          <td style={{ fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>{t.metric_type === "water_level" ? "%" : (m?.unit ?? t.unit ?? "")}</td>
                           <td>
                             <button className={`toggle ${edit.auto_control ? "on" : ""}`}
-                              onClick={() => setThreshEdits(prev => ({ ...prev, [t.metric_type]: { ...prev[t.metric_type], auto_control: !prev[t.metric_type]?.auto_control } }))} />
-                          </td>
+                              onClick={() => setThreshEdits(prev => ({ ...prev, [t.metric_type]: { ...prev[t.metric_type], auto_control: !prev[t.metric_type]?.auto_control } }))} />                          </td>
                           <td>
                             <select style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", fontFamily: "var(--font-mono)", fontSize: 11, outline: "none" }}
-                              value={edit.auto_action ?? ""}
-                              onChange={e => setThreshEdits(prev => ({ ...prev, [t.metric_type]: { ...prev[t.metric_type], auto_action: e.target.value } }))}>
-                              {Object.entries(actionLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                              value={currentAction}
+                              onChange={e => {
+                                const [target, cmd] = e.target.value ? e.target.value.split("|") : ["", ""];
+                                setThreshEdits(prev => ({ ...prev, [t.metric_type]: { ...prev[t.metric_type], auto_action: e.target.value, action_target: target || null, action_command: cmd || null } }));
+                              }}>
+                              {actionOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
                           </td>
                         </tr>

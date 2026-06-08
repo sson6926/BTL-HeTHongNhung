@@ -79,6 +79,28 @@ async def change_pond_type(device_id: str, body: dict, db: DbDep):
     return device
 
 
+@router.get("/{device_id}/status", summary="Get latest ON/OFF status per target")
+async def get_device_status(device_id: str, db: DbDep):
+    """Trả về trạng thái ON/OFF mới nhất cho mỗi target dựa vào device_history."""
+    from sqlalchemy import select, func
+    from app.models.device_history import DeviceHistory
+
+    # Lấy record mới nhất cho mỗi target
+    subq = (
+        select(DeviceHistory.target, func.max(DeviceHistory.id).label("max_id"))
+        .where(DeviceHistory.device_id == device_id)
+        .where(DeviceHistory.target.isnot(None))
+        .group_by(DeviceHistory.target)
+        .subquery()
+    )
+    result = await db.execute(
+        select(DeviceHistory)
+        .join(subq, DeviceHistory.id == subq.c.max_id)
+    )
+    rows = result.scalars().all()
+    return {row.target: row.action for row in rows}
+
+
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a device")
 async def delete_device(device_id: str, db: DbDep):
     """Delete a device record when a pond is removed."""
