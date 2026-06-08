@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import {
   LineChart, Line, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -34,6 +34,7 @@ const api = {
   }),
   latestSensors: (deviceId)            => apiFetch(`/sensors/latest?device_id=${encodeURIComponent(deviceId)}`),
   sensorHistory: (metric, limit = 30)  => apiFetch(`/sensors/history?metric_type=${metric}&limit=${limit}`),
+  aiForecast:    (deviceId, steps = 12) => apiFetch(`/sensors/predict?device_id=${encodeURIComponent(deviceId)}&steps=${steps}`),
   controlDevice: (deviceId, target, action) => apiFetch(`/devices/${encodeURIComponent(deviceId)}/control`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -713,7 +714,7 @@ function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
       setDevices(nextDevices);
       setForm({ name: "", esp32Id: "" });
     } catch (error) {
-      setFormError(error.message || "KhÃ´ng thá»ƒ thÃªm thiáº¿t bá»‹ vÃ o database.");
+      setFormError(error.message || "Không thể thêm thiết bị vào database.");
     } finally {
       setSubmitting(false);
     }
@@ -728,7 +729,7 @@ function PondOverview({ ponds, onAddPond, onOpenPond, onRemovePond }) {
       const nextDevices = await api.listDevices();
       setDevices(nextDevices);
     } catch (error) {
-      setFormError(error.message || "KhÃ´ng thá»ƒ xÃ³a thiáº¿t bá»‹ khá»i database.");
+      setFormError(error.message || "Không thể xóa thiết bị khỏi database.");
     } finally {
       setRemoving(prev => ({ ...prev, [pondId]: false }));
     }
@@ -866,6 +867,9 @@ function PondDetail({ pond, onBack }) {
   const [devices,       setDevices]      = useState([]);
   const [sensorHistory, setSensorHistory] = useState({});
   const [latest,        setLatest]        = useState({});
+  const [aiForecast,    setAiForecast]    = useState(null);
+  const [aiLoading,     setAiLoading]     = useState(false);
+  const [aiError,       setAiError]       = useState("");
   const [connected,     setConnected]     = useState(null);   // null=loading
   const [lastPoll,      setLastPoll]      = useState(null);
   const [busy,          setBusy]          = useState({});     // target → bool
@@ -919,6 +923,32 @@ function PondDetail({ pond, onBack }) {
         .catch(() => {});
     });
   }, [esp32Id]);
+
+  // ── Load AI water-quality forecast ────────────────────────────
+  useEffect(() => {
+    let mounted = true;
+    setAiLoading(true);
+    setAiError("");
+    setAiForecast(null);
+
+    api.aiForecast(esp32Id, 12)
+      .then(data => {
+        if (!mounted) return;
+        setAiForecast(data);
+        pushAlert("ok", `AI đã dự báo ${data.forecast_steps} giờ tiếp theo`);
+      })
+      .catch(error => {
+        if (!mounted) return;
+        setAiError(error.message || "Không thể tải dự báo AI");
+      })
+      .finally(() => {
+        if (mounted) setAiLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [esp32Id, pushAlert]);
 
   // ── Poll latest sensors every 5 s ────────────────────────────
   useEffect(() => {
@@ -1018,6 +1048,13 @@ function PondDetail({ pond, onBack }) {
     tmp: sensorHistory.temperature?.[i]?.v,
   }));
 
+  const aiChartData = (aiForecast?.forecasts ?? []).map(point => ({
+    t: new Date(point.forecast_time).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }),
+    ph: point.water_pH,
+    tds: point.TDS,
+    tmp: point.water_temp,
+  }));
+  const aiLastPoint = aiChartData[aiChartData.length - 1];
   const navIcons = ["⬡", "📊", "🔧", "🔔", "⚙️"];
 
   return (
@@ -1140,6 +1177,67 @@ function PondDetail({ pond, onBack }) {
               </div>
             </div>
 
+            {/* AI forecast */}
+            <div className="chart-card">
+              <div className="sec-head" style={{ marginBottom: 10 }}>
+                <div>
+                  <div className="sec-title">Dự báo AI</div>
+                  <p style={{ margin: "4px 0 0" }}>
+                    LSTM · {esp32Id} · dự báo pH, TDS và nhiệt độ nước trong 12 giờ tới
+                  </p>
+                </div>
+                <span className="sec-note">
+                  {aiLoading ? "Đang chạy AI..." : aiForecast ? `${aiForecast.input_points} mẫu đầu vào` : "Chưa có dữ liệu"}
+                </span>
+              </div>
+
+              {aiError ? (
+                <div style={{ color: "var(--danger)", fontSize: 12, fontFamily: "var(--font-mono)", padding: "10px 0" }}>
+                  {aiError}
+                </div>
+              ) : aiLoading ? (
+                <div style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)", padding: "10px 0" }}>
+                  Đang tải kết quả dự báo từ backend...
+                </div>
+              ) : aiChartData.length === 0 ? (
+                <div style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)", padding: "10px 0" }}>
+                  Chưa đủ 24 điểm dữ liệu pH, TDS và nhiệt độ để AI dự báo.
+                </div>
+              ) : (
+                <>
+                  <div className="pond-info" style={{ marginBottom: 14 }}>
+                    <div>
+                      <span>pH cuối kỳ</span>
+                      <strong>{aiLastPoint?.ph?.toFixed(2) ?? "--"}</strong>
+                    </div>
+                    <div>
+                      <span>TDS cuối kỳ</span>
+                      <strong>{aiLastPoint?.tds?.toFixed(0) ?? "--"} ppm</strong>
+                    </div>
+                    <div>
+                      <span>Nhiệt độ cuối kỳ</span>
+                      <strong>{aiLastPoint?.tmp?.toFixed(1) ?? "--"} °C</strong>
+                    </div>
+                    <div>
+                      <span>Số bước</span>
+                      <strong>{aiForecast?.forecast_steps ?? aiChartData.length} giờ</strong>
+                    </div>
+                  </div>
+
+                  <ResponsiveContainer width="100%" height={190}>
+                    <LineChart data={aiChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
+                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={1} />
+                      <YAxis tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
+                      <Tooltip content={<ChartTT />} />
+                      <Line type="monotone" dataKey="ph"  name="pH dự báo" stroke="#1D9E75" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tds" name="TDS dự báo" stroke="#BA7517" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tmp" name="Nhiệt độ dự báo" stroke="#A32D2D" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </>
+              )}
+            </div>
             {/* ── Devices + Water ── */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 190px", gap: 16 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
