@@ -1,7 +1,9 @@
-﻿import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   LineChart, Line, AreaChart, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, ComposedChart,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 
 const API = "/api";
@@ -69,12 +71,36 @@ const POND_TYPES = {
 
 // ── Sensor metadata ───────────────────────────────────────────────
 const METRICS = {
-  o2:          { icon: "💧", label: "Oxy hòa tan (O₂)", unit: "mg/L", lo: 5,   hi: 9   },
-  ph:          { icon: "⚗️",  label: "Độ pH",            unit: "pH",   lo: 6.5, hi: 8.5 },
-  nh3:         { icon: "☣️",  label: "Amoniac (NH₃)",    unit: "mg/L", lo: 0,   hi: 0.5 },
-  temperature: { icon: "🌡️", label: "Nhiệt độ nước",    unit: "°C",   lo: 24,  hi: 32  },
-  tds:         { icon: "🧪", label: "TDS chất rắn",      unit: "ppm",  lo: 200, hi: 500 },
-  turbidity:   { icon: "🌊", label: "Độ đục",            unit: "NTU",  lo: 0,   hi: 20  },
+  o2:          { icon: "💧", label: "Oxy hòa tan (O₂)", unit: "mg/L", lo: 5,   hi: 9,
+    desc: "Lượng oxy hòa tan trong nước, cần thiết cho hô hấp của cá và tôm.",
+    low:  "Thiếu oxy gây cá nổi đầu, ngộp thở, chết hàng loạt. Cần bật máy sục khí ngay.",
+    high: "Oxy quá cao hiếm gặp, thường không gây hại nhưng có thể gây bệnh bong bóng khí.",
+  },
+  ph:          { icon: "⚗️",  label: "Độ pH",            unit: "pH",   lo: 6.5, hi: 8.5,
+    desc: "Độ axit/kiềm của nước. pH ảnh hưởng trực tiếp đến hệ miễn dịch và sinh trưởng.",
+    low:  "pH quá thấp (axit) làm cá stress, tổn thương mang, giảm khả năng hấp thụ oxy.",
+    high: "pH quá cao (kiềm) làm NH₃ độc hơn, gây bỏng mang và chết cá.",
+  },
+  nh3:         { icon: "☣️",  label: "Amoniac (NH₃)",    unit: "mg/L", lo: 0,   hi: 0.5,
+    desc: "Chất thải từ phân cá và thức ăn thừa. Rất độc, đặc biệt khi pH cao.",
+    low:  "NH₃ thấp là tốt — môi trường sạch, ít chất thải hữu cơ.",
+    high: "NH₃ cao gây tổn thương mang, thần kinh, làm cá bơi lờ đờ và chết. Cần thay nước ngay.",
+  },
+  temperature: { icon: "🌡️", label: "Nhiệt độ nước",    unit: "°C",   lo: 24,  hi: 32,
+    desc: "Nhiệt độ nước ảnh hưởng đến tốc độ trao đổi chất, tiêu hóa và miễn dịch.",
+    low:  "Nhiệt độ thấp làm cá ăn kém, chậm lớn, dễ mắc bệnh.",
+    high: "Nhiệt độ cao làm giảm oxy hòa tan, tăng độc tính NH₃, cá dễ bị stress nhiệt.",
+  },
+  tds:         { icon: "🧪", label: "TDS chất rắn",      unit: "ppm",  lo: 200, hi: 500,
+    desc: "Tổng chất rắn hòa tan — khoáng chất, muối, kim loại trong nước.",
+    low:  "TDS thấp — nước thiếu khoáng chất, cần bổ sung khoáng hoặc thay nước từ nguồn giàu khoáng hơn.",
+    high: "TDS cao — nước bẩn, nhiều chất thải. Cần thay nước để giảm tải chất ô nhiễm.",
+  },
+  turbidity:   { icon: "🌊", label: "Độ đục",            unit: "NTU",  lo: 0,   hi: 20,
+    desc: "Mức độ trong đục của nước, phản ánh lượng hạt lơ lửng (phù sa, tảo, chất hữu cơ).",
+    low:  "Nước trong — tốt cho quan sát và quang hợp.",
+    high: "Nước đục — tảo hoặc chất hữu cơ nhiều, giảm oxy ban đêm, che khuất tầm nhìn của cá.",
+  },
 };
 const SENSOR_ORDER = ["o2", "ph", "nh3", "temperature", "tds", "turbidity"];
 const CONTROL_TARGETS = [
@@ -191,8 +217,16 @@ const CSS = `
   .sec-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-sec);display:flex;align-items:center;gap:8px}
   .sec-title::before{content:'';width:12px;height:2px;background:var(--blue-400);display:block;border-radius:2px}
   .sec-note{font-size:11px;color:var(--text-dim);font-family:var(--font-mono)}
-  .sensor-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px}
-  .s-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden;transition:box-shadow .2s,border-color .2s,transform .2s}
+  .sensor-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;overflow:visible}
+  .s-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-sm);position:relative;overflow:visible;transition:box-shadow .2s,border-color .2s,transform .2s}
+  .s-tooltip{display:none;position:fixed;z-index:99999;background:var(--blue-900);border:1px solid var(--blue-600);border-radius:var(--radius);padding:12px 14px;width:240px;box-shadow:0 4px 20px rgba(4,44,83,.3);pointer-events:none}
+  .s-card:hover .s-tooltip{display:block}
+  .s-tooltip-title{font-size:11px;font-weight:700;color:#fff;margin-bottom:6px}
+  .s-tooltip-desc{font-size:11px;color:var(--blue-100);line-height:1.5;margin-bottom:8px}
+  .s-tooltip-warn{font-size:10px;font-family:var(--font-mono);line-height:1.5;margin-bottom:4px;padding:5px 8px;border-radius:6px}
+  .s-tooltip-warn.low{background:rgba(29,158,117,.15);color:#6ee7c4}
+  .s-tooltip-warn.high{background:rgba(163,45,45,.15);color:#fca5a5}
+  .s-tooltip-range{font-size:10px;color:var(--blue-200);font-family:var(--font-mono);border-top:1px solid rgba(255,255,255,.1);padding-top:6px;margin-top:6px}
   .s-card:hover{box-shadow:var(--shadow);border-color:var(--border-md);transform:translateY(-1px)}
   .s-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--c,var(--blue-400));border-radius:var(--radius) var(--radius) 0 0}
   .s-card.ok{--c:var(--ok)} .s-card.warning{--c:var(--warn);border-color:rgba(186,117,23,.25)}
@@ -324,13 +358,47 @@ const ChartTT = ({ active, payload, label }) => {
 };
 
 // ── SCard ─────────────────────────────────────────────────────────
-function SCard({ icon, label, value, unit, lo, hi, history }) {
+function SCard({ icon, label, value, unit, lo, hi, history, desc, low, high }) {
+  const [tooltipPos, setTooltipPos] = useState(null);
   const st = statusOf(value, lo, hi);
   const colors = { ok: "#1D9E75", warning: "#BA7517", danger: "#A32D2D" };
   const labels = { ok: "Bình thường", warning: "Cảnh báo", danger: "NGUY HIỂM" };
   const display = value != null ? (+value).toFixed(2) : "--";
+
+  const handleMouseEnter = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const tooltipW = 240;
+    const screenW = window.innerWidth;
+    const spaceRight = screenW - rect.right;
+    const left = spaceRight > tooltipW + 12 ? rect.right + 4 : rect.left - tooltipW - 4;
+    const top = rect.top;
+    setTooltipPos({ top, left });
+  };
+
+  const tooltip = tooltipPos && createPortal(
+    <div style={{
+      position: "fixed", top: tooltipPos.top, left: tooltipPos.left,
+      zIndex: 999999, width: 240,
+      background: "var(--blue-900)", border: "1px solid var(--blue-600)",
+      borderRadius: 12, padding: "12px 14px",
+      boxShadow: "0 4px 20px rgba(4,44,83,.4)", pointerEvents: "none",
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{icon} {label}</div>
+      {desc && <div style={{ fontSize: 11, color: "var(--blue-100)", lineHeight: 1.5, marginBottom: 8 }}>{desc}</div>}
+      {low  && <div style={{ fontSize: 10, fontFamily: "var(--font-mono)", lineHeight: 1.5, marginBottom: 4, padding: "5px 8px", borderRadius: 6, background: "rgba(29,158,117,.15)", color: "#6ee7c4" }}>🔽 Khi thấp: {low}</div>}
+      {high && <div style={{ fontSize: 10, fontFamily: "var(--font-mono)", lineHeight: 1.5, marginBottom: 4, padding: "5px 8px", borderRadius: 6, background: "rgba(163,45,45,.15)", color: "#fca5a5" }}>🔼 Khi cao: {high}</div>}
+      <div style={{ fontSize: 10, color: "var(--blue-200)", fontFamily: "var(--font-mono)", borderTop: "1px solid rgba(255,255,255,.1)", paddingTop: 6, marginTop: 4 }}>
+        {lo != null && <span>Min an toàn: {lo} {unit}</span>}
+        {lo != null && hi != null && <span> · </span>}
+        {hi != null && <span>Max an toàn: {hi} {unit}</span>}
+      </div>
+    </div>,
+    document.body
+  );
+
   return (
-    <div className={`s-card ${st}`}>
+    <div className={`s-card ${st}`} onMouseEnter={handleMouseEnter} onMouseLeave={() => setTooltipPos(null)}>
+      {tooltip}
       <div className="s-icon">{icon}</div>
       <div className="s-label">{label}</div>
       <div className="s-value">{display}<em> {unit}</em></div>
@@ -923,8 +991,44 @@ function PondDetail({ pond, onBack }) {
                 <div className="sensor-grid">
                   {SENSOR_ORDER.map(m => {
                     const cfg = METRICS[m];
-                    return <SCard key={m} icon={cfg.icon} label={cfg.label} value={latest[m]} unit={cfg.unit} lo={getThreshLo(m)} hi={getThreshHi(m)} history={sensorHistory[m]} />;
+                    return <SCard key={m} icon={cfg.icon} label={cfg.label} value={latest[m]} unit={cfg.unit} lo={getThreshLo(m)} hi={getThreshHi(m)} history={sensorHistory[m]} desc={cfg.desc} low={cfg.low} high={cfg.high} />;
                   })}
+                </div>
+              </div>
+
+              {/* Charts lịch sử */}
+              <div className="two-col">
+                <div className="chart-card">
+                  <h3>O₂ &amp; NH₃ theo thời gian</h3>
+                  <p>{esp32Id} · {chartData.length} mẫu gần nhất</p>
+                  <ResponsiveContainer width="100%" height={150}>
+                    <AreaChart data={chartData}>
+                      <defs>
+                        <linearGradient id="go2" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#378ADD" stopOpacity={.25} /><stop offset="95%" stopColor="#378ADD" stopOpacity={0} /></linearGradient>
+                        <linearGradient id="gnh3" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#BA7517" stopOpacity={.2} /><stop offset="95%" stopColor="#BA7517" stopOpacity={0} /></linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
+                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={5} />
+                      <YAxis tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
+                      <Tooltip content={<ChartTT />} />
+                      <Area type="monotone" dataKey="o2"  stroke="#185FA5" fill="url(#go2)"  strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="nh3" stroke="#BA7517" fill="url(#gnh3)" strokeWidth={2} dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="chart-card">
+                  <h3>pH &amp; Nhiệt độ</h3>
+                  <p>DS18B20 · {chartData.length} mẫu gần nhất</p>
+                  <ResponsiveContainer width="100%" height={150}>
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
+                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={5} />
+                      <YAxis tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
+                      <Tooltip content={<ChartTT />} />
+                      <Line type="monotone" dataKey="ph"  stroke="#1D9E75" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tmp" stroke="#A32D2D" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
 
@@ -936,7 +1040,29 @@ function PondDetail({ pond, onBack }) {
                 </div>
                 <div className="device-grid">
                   {actuators.map(dev => {
-                    const note = dev.target === "oxygen" ? `O2: ${latest.o2 != null ? (+latest.o2).toFixed(2) : "--"} mg/L` : dev.target === "pump_drain" ? `NH3: ${latest.nh3 != null ? (+latest.nh3).toFixed(2) : "--"} mg/L` : `Mực nước: ${wl != null ? (+wl).toFixed(0) : "--"}%`;
+                    // Lấy threshold liên quan để hiện điều kiện trigger
+                    const buildNote = (target) => {
+                      if (target === "oxygen") {
+                        const t = thresholds.find(x => x.metric_type === "o2");
+                        const val = latest.o2 != null ? (+latest.o2).toFixed(2) : "--";
+                        const cond = t?.min_value != null ? `Trigger: O₂ < ${t.min_value} mg/L` : "";
+                        return `O₂: ${val} mg/L${cond ? "  ·  " + cond : ""}`;
+                      }
+                      if (target === "pump_fill") {
+                        const t = thresholds.find(x => x.metric_type === "water_level");
+                        const val = wl != null ? (+wl).toFixed(0) : "--";
+                        const cond = t?.min_value != null ? `Trigger: Mực nước < ${t.min_value}%` : "";
+                        return `Mực nước: ${val}%${cond ? "  ·  " + cond : ""}`;
+                      }
+                      if (target === "pump_drain") {
+                        const t = thresholds.find(x => x.metric_type === "nh3");
+                        const val = latest.nh3 != null ? (+latest.nh3).toFixed(2) : "--";
+                        const cond = t?.max_value != null ? `Trigger: NH₃ > ${t.max_value} mg/L` : "";
+                        return `NH₃: ${val} mg/L${cond ? "  ·  " + cond : ""}`;
+                      }
+                      return "";
+                    };
+                    const note = buildNote(dev.target);
                     return <DCard key={dev.device_id} device={dev} sensorNote={note} onControl={handleControl} busy={!!busy[dev.device_id]} />;
                   })}
                   <FeederCard device={feeder} onControl={handleControl} busy={!!busy[feeder.device_id]} />
@@ -995,78 +1121,95 @@ function PondDetail({ pond, onBack }) {
               </div>
             </>}
 
-            {/* ── NAV 1: Phân tích & Chan doan ── */}
+            {/* ── NAV 1: Phân tích & Chẩn đoán ── */}
             {nav === 1 && <>
-              <div className="two-col">
-                <div className="chart-card">
-                  <h3>O2 &amp; NH3 theo thoi gian</h3>
-                  <p>{esp32Id} · {chartData.length} mẫu gần nhất</p>
-                  <ResponsiveContainer width="100%" height={150}>
-                    <AreaChart data={chartData}>
-                      <defs>
-                        <linearGradient id="go2" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#378ADD" stopOpacity={.25} /><stop offset="95%" stopColor="#378ADD" stopOpacity={0} /></linearGradient>
-                        <linearGradient id="gnh3" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#BA7517" stopOpacity={.2} /><stop offset="95%" stopColor="#BA7517" stopOpacity={0} /></linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
-                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={5} />
-                      <YAxis tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
-                      <Tooltip content={<ChartTT />} />
-                      <Area type="monotone" dataKey="o2"  stroke="#185FA5" fill="url(#go2)"  strokeWidth={2} dot={false} />
-                      <Area type="monotone" dataKey="nh3" stroke="#BA7517" fill="url(#gnh3)" strokeWidth={2} dot={false} />
-                    </AreaChart>
-                  </ResponsiveContainer>
+              {aiError ? (
+                <div className="chart-card" style={{ color: "var(--danger)", fontSize: 12, fontFamily: "var(--font-mono)" }}>{aiError}</div>
+              ) : aiLoading ? (
+                <div className="chart-card" style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)" }}>Đang tải kết quả dự báo AI từ backend...</div>
+              ) : aiChartData.length === 0 ? (
+                <div className="chart-card" style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)" }}>Chưa đủ dữ liệu để AI dự báo (cần ≥ 24 mẫu pH, TDS, nhiệt độ).</div>
+              ) : <>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                  <div className="sec-title">Dự báo AI (LSTM) · {aiForecast?.forecast_steps ?? aiChartData.length} giờ tới</div>
+                  <span className="sec-note">{aiForecast?.input_points} mẫu đầu vào</span>
                 </div>
+
+                {/* Biểu đồ tổng hợp */}
                 <div className="chart-card">
-                  <h3>pH &amp; Nhiet do</h3>
-                  <p>DS18B20 · {chartData.length} mẫu gần nhất</p>
-                  <ResponsiveContainer width="100%" height={150}>
-                    <LineChart data={chartData}>
+                  <h3>Tổng hợp dự báo pH · TDS · Nhiệt độ</h3>
+                  <p>LSTM · {esp32Id} · {aiChartData.length} giờ tới</p>
+                  <div className="pond-info" style={{ marginBottom: 14 }}>
+                    <div><span>pH cuối kỳ</span><strong>{aiLastPoint?.ph?.toFixed(2) ?? "--"}</strong></div>
+                    <div><span>TDS cuối kỳ</span><strong>{aiLastPoint?.tds?.toFixed(0) ?? "--"} ppm</strong></div>
+                    <div><span>Nhiệt độ cuối kỳ</span><strong>{aiLastPoint?.tmp?.toFixed(1) ?? "--"} °C</strong></div>
+                    <div><span>Số bước</span><strong>{aiForecast?.forecast_steps ?? aiChartData.length} giờ</strong></div>
+                  </div>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <LineChart data={aiChartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
-                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={5} />
+                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={1} />
                       <YAxis tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
                       <Tooltip content={<ChartTT />} />
-                      <Line type="monotone" dataKey="ph"  stroke="#1D9E75" strokeWidth={2} dot={false} />
-                      <Line type="monotone" dataKey="tmp" stroke="#A32D2D" strokeWidth={2} dot={false} />
+                      <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono" }} />
+                      <Line type="monotone" dataKey="ph"  name="pH"        stroke="#1D9E75" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tds" name="TDS"       stroke="#BA7517" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tmp" name="Nhiệt độ"  stroke="#A32D2D" strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
-              </div>
 
-              <div className="chart-card">
-                <div className="sec-head" style={{ marginBottom: 10 }}>
-                  <div><div className="sec-title">Du bao AI (LSTM)</div>
-                    <p style={{ margin: "4px 0 0" }}>Du bao pH, TDS va nhiet do nuoc trong 12 gio toi</p>
-                  </div>
-                  <span className="sec-note">{aiLoading ? "Đang chạy AI..." : aiForecast ? `${aiForecast.input_points} mẫu đầu vào` : "Chưa có dữ liệu"}</span>
+                {/* pH dự báo */}
+                <div className="chart-card">
+                  <h3>🧪 pH dự báo</h3>
+                  <p>Dao động pH trong {aiChartData.length} giờ tới · an toàn: 6.5 – 8.5</p>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <ComposedChart data={aiChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
+                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={1} />
+                      <YAxis domain={["auto","auto"]} tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
+                      <Tooltip content={<ChartTT />} />
+                      <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono" }} />
+                      <Bar dataKey="ph" name="pH (cột)" fill="#B5D4F4" radius={[3,3,0,0]} />
+                      <Line type="monotone" dataKey="ph" name="pH (xu hướng)" stroke="#185FA5" strokeWidth={2} dot={false} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
                 </div>
-                {aiError ? (
-                  <div style={{ color: "var(--danger)", fontSize: 12, fontFamily: "var(--font-mono)", padding: "10px 0" }}>{aiError}</div>
-                ) : aiLoading ? (
-                  <div style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)", padding: "10px 0" }}>Đang tải kết quả dự báo từ backend...</div>
-                ) : aiChartData.length === 0 ? (
-                  <div style={{ color: "var(--text-dim)", fontSize: 12, fontFamily: "var(--font-mono)", padding: "10px 0" }}>Chua du 24 diem du lieu pH, TDS va nhiet do de AI du bao.</div>
-                ) : (
-                  <>
-                    <div className="pond-info" style={{ marginBottom: 14 }}>
-                      <div><span>pH cuối kỳ</span><strong>{aiLastPoint?.ph?.toFixed(2) ?? "--"}</strong></div>
-                      <div><span>TDS cuối kỳ</span><strong>{aiLastPoint?.tds?.toFixed(0) ?? "--"} ppm</strong></div>
-                      <div><span>Nhiệt độ cuối kỳ</span><strong>{aiLastPoint?.tmp?.toFixed(1) ?? "--"} C</strong></div>
-                      <div><span>Số bước</span><strong>{aiForecast?.forecast_steps ?? aiChartData.length} gio</strong></div>
-                    </div>
-                    <ResponsiveContainer width="100%" height={190}>
-                      <LineChart data={aiChartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
-                        <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={1} />
-                        <YAxis tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
-                        <Tooltip content={<ChartTT />} />
-                        <Line type="monotone" dataKey="ph"  name="pH du bao" stroke="#1D9E75" strokeWidth={2} dot={false} />
-                        <Line type="monotone" dataKey="tds" name="TDS du bao" stroke="#BA7517" strokeWidth={2} dot={false} />
-                        <Line type="monotone" dataKey="tmp" name="Nhiet do du bao" stroke="#A32D2D" strokeWidth={2} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </>
-                )}
-              </div>
+
+                {/* TDS dự báo */}
+                <div className="chart-card">
+                  <h3>🧪 TDS dự báo</h3>
+                  <p>Tổng chất rắn hòa tan trong {aiChartData.length} giờ tới · đơn vị: ppm</p>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <ComposedChart data={aiChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
+                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={1} />
+                      <YAxis domain={["auto","auto"]} tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
+                      <Tooltip content={<ChartTT />} />
+                      <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono" }} />
+                      <Bar dataKey="tds" name="TDS (cột)" fill="#FAEEDA" radius={[3,3,0,0]} />
+                      <Line type="monotone" dataKey="tds" name="TDS (xu hướng)" stroke="#BA7517" strokeWidth={2} dot={false} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Nhiệt độ dự báo */}
+                <div className="chart-card">
+                  <h3>🌡️ Nhiệt độ dự báo</h3>
+                  <p>Nhiệt độ nước trong {aiChartData.length} giờ tới · đơn vị: °C</p>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <ComposedChart data={aiChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(55,138,221,.12)" />
+                      <XAxis dataKey="t" tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} interval={1} />
+                      <YAxis domain={["auto","auto"]} tick={{ fontSize: 9, fill: "#378ADD", fontFamily: "JetBrains Mono" }} />
+                      <Tooltip content={<ChartTT />} />
+                      <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono" }} />
+                      <Bar dataKey="tmp" name="Nhiệt độ (cột)" fill="#FCEBEB" radius={[3,3,0,0]} />
+                      <Line type="monotone" dataKey="tmp" name="Nhiệt độ (xu hướng)" stroke="#A32D2D" strokeWidth={2} dot={false} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </>}
             </>}
 
             {/* ── NAV 2: Nguong cảnh báo ── */}
