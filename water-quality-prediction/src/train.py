@@ -11,7 +11,7 @@ import pickle
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 from preprocess import preprocess_and_resample, prepare_lstm_data
-from model import WaterQualityLSTM
+from model import WaterQualityLSTM, WaterQualityGRU, WaterQualitySeq2Seq
 
 # Set plotting style for professional look
 sns.set_theme(style="darkgrid")
@@ -30,125 +30,183 @@ class WaterQualityDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-def train_model(epochs=100, batch_size=32, lr=0.001, patience=15):
+def train_model(model_name="lstm", epochs=100, batch_size=32, lr=0.001, patience=15):
     # Create artifacts directory if it doesn't exist
-    os.makedirs("artifacts", exist_ok=True)
+    os.makedirs("../artifacts", exist_ok=True)
     
     # 1. Preprocess and prepare data
     df_resampled = preprocess_and_resample()
-    X_train, y_train, X_test, y_test, scaler = prepare_lstm_data(df_resampled)
+    
+    # Seq2Seq predicts a sequence of 12 steps directly
+    forecast_horizon = 12 if model_name == "seq2seq" else 1
+    X_train, y_train, X_test, y_test, scaler = prepare_lstm_data(
+        df_resampled, forecast_horizon=forecast_horizon
+    )
     
     # Save the scaler so we can reuse it during prediction
-    with open("artifacts/scaler.pkl", "wb") as f:
+    with open("../artifacts/scaler.pkl", "wb") as f:
         pickle.dump(scaler, f)
-    print("MinMaxScaler saved to artifacts/scaler.pkl")
+    print("MinMaxScaler saved to ../artifacts/scaler.pkl")
     
-    # Create PyTorch datasets and loaders
-    train_dataset = WaterQualityDataset(X_train, y_train)
-    test_dataset = WaterQualityDataset(X_test, y_test)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
-    # 2. Setup Device & Model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Training on device: {device}")
-    
-    model = WaterQualityLSTM(input_size=3, hidden_size=64, num_layers=2, output_size=3, dropout=0.2)
-    model = model.to(device)
-    
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
-    
-    # 3. Training Loop with Early Stopping
-    train_losses = []
-    test_losses = []
-    
-    best_loss = float('inf')
-    patience_counter = 0
-    best_model_weights = None
-    
-    print("\n--- Training LSTM Model ---")
-    for epoch in range(1, epochs + 1):
-        model.train()
-        epoch_train_losses = []
+    # 2. XGBoost training path (non-deep learning)
+    if model_name == "xgboost":
+        print("\n--- Training XGBoost Model ---")
+        # Flatten input from (N, 24, 3) to (N, 72)
+        X_train_flat = X_train.reshape(X_train.shape[0], -1)
+        X_test_flat = X_test.reshape(X_test.shape[0], -1)
         
-        for batch_X, batch_y in train_loader:
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+        import xgboost as xgb
+        model = xgb.XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.05, random_state=42)
+        model.fit(X_train_flat, y_train, eval_set=[(X_test_flat, y_test)], verbose=True)
+        
+        with open("../artifacts/xgboost_model.pkl", "wb") as f:
+            pickle.dump(model, f)
+        print("XGBoost model saved to ../artifacts/xgboost_model.pkl")
+        
+        all_predictions = model.predict(X_test_flat)
+        all_actuals = y_test
+        
+        # Mock training/test losses for plotting (XGBoost loss curve)
+        results = model.evals_result()
+        train_losses = results['validation_0']['rmse']
+        test_losses = results['validation_0']['rmse'] # simplify plotting
+        
+    else:
+        # 3. Setup PyTorch Dataset & DataLoader
+        train_dataset = WaterQualityDataset(X_train, y_train)
+        test_dataset = WaterQualityDataset(X_test, y_test)
+        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Training on device: {device}")
+        
+        # Instantiate correct model
+        if model_name == "lstm":
+            model = WaterQualityLSTM(input_size=3, hidden_size=64, num_layers=2, output_size=3, dropout=0.2)
+            save_path = "../artifacts/lstm_water_quality.pth"
+        elif model_name == "gru":
+            model = WaterQualityGRU(input_size=3, hidden_size=64, num_layers=2, output_size=3, dropout=0.2)
+            save_path = "../artifacts/gru_water_quality.pth"
+        elif model_name == "seq2seq":
+            model = WaterQualitySeq2Seq(input_size=3, hidden_size=64, num_layers=2, output_size=3, forecast_horizon=12, dropout=0.2)
+            save_path = "../artifacts/seq2seq_water_quality.pth"
+        else:
+            raise ValueError(f"Unknown model type: {model_name}")
             
-            # Forward pass
-            predictions = model(batch_X)
-            loss = criterion(predictions, batch_y)
+        model = model.to(device)
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+        
+        # Training Loop with Early Stopping
+        train_losses = []
+        test_losses = []
+        
+        best_loss = float('inf')
+        patience_counter = 0
+        best_model_weights = None
+        
+        print(f"\n--- Training {model_name.upper()} Model ---")
+        for epoch in range(1, epochs + 1):
+            model.train()
+            epoch_train_losses = []
             
-            # Backward pass and optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            for batch_X, batch_y in train_loader:
+                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+                
+                # Forward pass
+                if model_name == "seq2seq":
+                    # We can use teacher forcing ratio that decays
+                    teacher_forcing_ratio = max(0.0, 0.5 - (epoch / 50.0))
+                    predictions = model(batch_X, teacher_forcing_ratio=teacher_forcing_ratio, target_y=batch_y)
+                else:
+                    predictions = model(batch_X)
+                    
+                loss = criterion(predictions, batch_y)
+                
+                # Backward pass and optimize
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                epoch_train_losses.append(loss.item())
+                
+            # Evaluate on test set
+            model.eval()
+            epoch_test_losses = []
             
-            epoch_train_losses.append(loss.item())
+            with torch.no_grad():
+                for batch_X, batch_y in test_loader:
+                    batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+                    if model_name == "seq2seq":
+                        predictions = model(batch_X, teacher_forcing_ratio=0.0)
+                    else:
+                        predictions = model(batch_X)
+                    test_loss = criterion(predictions, batch_y)
+                    epoch_test_losses.append(test_loss.item())
+                    
+            mean_train_loss = np.mean(epoch_train_losses)
+            mean_test_loss = np.mean(epoch_test_losses)
             
-        # Evaluate on test set
+            train_losses.append(mean_train_loss)
+            test_losses.append(mean_test_loss)
+            
+            if epoch % 5 == 0 or epoch == 1:
+                print(f"Epoch {epoch}/{epochs} | Train MSE Loss: {mean_train_loss:.6f} | Test MSE Loss: {mean_test_loss:.6f}")
+                
+            # Early stopping check
+            if mean_test_loss < best_loss:
+                best_loss = mean_test_loss
+                patience_counter = 0
+                best_model_weights = model.state_dict().copy()
+                # Save the best model
+                torch.save(best_model_weights, save_path)
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"\nEarly stopping triggered at epoch {epoch}! Best Test MSE Loss: {best_loss:.6f}")
+                    break
+                    
+        # Load best weights back to the model
+        if best_model_weights is not None:
+            model.load_state_dict(best_model_weights)
+            print(f"Loaded best weights for {model_name.upper()} from training phase.")
+            
+        # 4. Evaluation and Inversion of Scaling
         model.eval()
-        epoch_test_losses = []
+        all_predictions = []
+        all_actuals = []
         
         with torch.no_grad():
             for batch_X, batch_y in test_loader:
-                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-                predictions = model(batch_X)
-                test_loss = criterion(predictions, batch_y)
-                epoch_test_losses.append(test_loss.item())
+                batch_X = batch_X.to(device)
+                if model_name == "seq2seq":
+                    predictions = model(batch_X, teacher_forcing_ratio=0.0)
+                else:
+                    predictions = model(batch_X)
+                all_predictions.append(predictions.cpu().numpy())
+                all_actuals.append(batch_y.numpy())
                 
-        mean_train_loss = np.mean(epoch_train_losses)
-        mean_test_loss = np.mean(epoch_test_losses)
+        all_predictions = np.concatenate(all_predictions, axis=0)
+        all_actuals = np.concatenate(all_actuals, axis=0)
         
-        train_losses.append(mean_train_loss)
-        test_losses.append(mean_test_loss)
-        
-        if epoch % 5 == 0 or epoch == 1:
-            print(f"Epoch {epoch}/{epochs} | Train MSE Loss: {mean_train_loss:.6f} | Test MSE Loss: {mean_test_loss:.6f}")
-            
-        # Early stopping check
-        if mean_test_loss < best_loss:
-            best_loss = mean_test_loss
-            patience_counter = 0
-            best_model_weights = model.state_dict().copy()
-            # Save the best model
-            torch.save(best_model_weights, "artifacts/lstm_water_quality.pth")
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                print(f"\nEarly stopping triggered at epoch {epoch}! Best Test MSE Loss: {best_loss:.6f}")
-                break
-                
-    # Load best weights back to the model
-    if best_model_weights is not None:
-        model.load_state_dict(best_model_weights)
-        print("Loaded best weights from training phase.")
-        
-    # 4. Evaluation and Inversion of Scaling
-    model.eval()
-    all_predictions = []
-    all_actuals = []
-    
-    with torch.no_grad():
-        for batch_X, batch_y in test_loader:
-            batch_X = batch_X.to(device)
-            predictions = model(batch_X)
-            all_predictions.append(predictions.cpu().numpy())
-            all_actuals.append(batch_y.numpy())
-            
-    all_predictions = np.concatenate(all_predictions, axis=0)
-    all_actuals = np.concatenate(all_actuals, axis=0)
-    
     # Inverse transform to original physical units
-    # scaler expects shape (N, 3), and both arrays are (N, 3)
-    inv_predictions = scaler.inverse_transform(all_predictions)
-    inv_actuals = scaler.inverse_transform(all_actuals)
-    
+    if model_name == "seq2seq":
+        # Shape: (N, 12, F) -> Reshape to (N*12, F) to inverse scale, then keep step 0 (1h ahead) for evaluation
+        N, H, F = all_predictions.shape
+        inv_predictions_all = scaler.inverse_transform(all_predictions.reshape(-1, F)).reshape(N, H, F)
+        inv_actuals_all = scaler.inverse_transform(all_actuals.reshape(-1, F)).reshape(N, H, F)
+        inv_predictions = inv_predictions_all[:, 0, :]
+        inv_actuals = inv_actuals_all[:, 0, :]
+    else:
+        inv_predictions = scaler.inverse_transform(all_predictions)
+        inv_actuals = scaler.inverse_transform(all_actuals)
+        
     features = ['water_pH', 'TDS', 'water_temp']
     units = ['', ' ppm', ' °C']
     
-    print("\n--- Model Evaluation on Test Set ---")
+    print(f"\n--- Model Evaluation ({model_name.upper()}) on Test Set (1-Hour Ahead) ---")
     metrics_summary = {}
     for idx, feature in enumerate(features):
         y_act = inv_actuals[:, idx]
@@ -168,47 +226,55 @@ def train_model(epochs=100, batch_size=32, lr=0.001, patience=15):
     # 5. Visualizations
     # Plot 1: Loss Curve
     plt.figure(figsize=(10, 5))
-    plt.plot(train_losses, label='Train MSE Loss', color='#1f77b4', linewidth=2)
-    plt.plot(test_losses, label='Test MSE Loss', color='#ff7f0e', linewidth=2)
-    plt.title('LSTM Model Training History (MSE Loss)', fontsize=14, fontweight='bold', pad=15)
+    plt.plot(train_losses, label='Train Loss', color='#1f77b4', linewidth=2)
+    plt.plot(test_losses, label='Test Loss', color='#ff7f0e', linewidth=2)
+    plt.title(f'{model_name.upper()} Model Training History', fontsize=14, fontweight='bold', pad=15)
     plt.xlabel('Epochs', fontsize=12)
-    plt.ylabel('Mean Squared Error (Scaled)', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
     plt.legend(fontsize=11)
     plt.tight_layout()
-    plt.savefig("artifacts/lstm_loss_curve.png", dpi=150)
+    plt.savefig(f"../artifacts/{model_name}_loss_curve.png", dpi=150)
     plt.close()
     
     # Plot 2: actual vs predictions side-by-side
     fig, axes = plt.subplots(3, 1, figsize=(12, 15), sharex=False)
     colors = ['#1f77b4', '#2ca02c', '#d62728']
     
-    # Let's plot only a subset of test set (e.g. 100 points) for visual clarity
     num_plot_points = min(150, len(inv_actuals))
     plot_indices = np.arange(num_plot_points)
     
     for idx, feature in enumerate(features):
         ax = axes[idx]
         ax.plot(plot_indices, inv_actuals[:num_plot_points, idx], label='Actual', color='#2b2b2b', alpha=0.6, linestyle='--', marker='o', markersize=4)
-        ax.plot(plot_indices, inv_predictions[:num_plot_points, idx], label='LSTM Predicted', color=colors[idx], linewidth=2, marker='x', markersize=4)
+        ax.plot(plot_indices, inv_predictions[:num_plot_points, idx], label=f'{model_name.upper()} Predicted', color=colors[idx], linewidth=2, marker='x', markersize=4)
         
         ax.set_title(f"Comparison of Actual vs Predicted: {feature}", fontsize=13, fontweight='bold')
         ax.set_ylabel(f"Value{units[idx]}", fontsize=11)
         ax.legend(fontsize=10, loc='upper right')
         
-        # Display small box with error metrics
         metric_str = f"RMSE: {metrics_summary[feature]['RMSE']:.3f}\nMAE: {metrics_summary[feature]['MAE']:.3f}\nR²: {metrics_summary[feature]['R2']:.3f}"
         ax.text(0.02, 0.05, metric_str, transform=ax.transAxes, fontsize=10,
                 bbox=dict(boxstyle="round,pad=0.3", fc="#f7f7f7", ec="gray", alpha=0.8))
         
     plt.xlabel("Time Step (Hourly Test Samples)", fontsize=12)
-    plt.suptitle("LSTM Multi-step predictions on Water Quality Test Set", fontsize=16, fontweight='bold', y=0.99)
+    plt.suptitle(f"{model_name.upper()} Predictions vs Actuals on Test Set", fontsize=16, fontweight='bold', y=0.99)
     plt.tight_layout()
-    plt.savefig("artifacts/lstm_predictions_vs_actuals.png", dpi=150)
+    plt.savefig(f"../artifacts/{model_name}_predictions_vs_actuals.png", dpi=150)
     plt.close()
     
-    print("\nVisualizations saved successfully:")
-    print("  - artifacts/lstm_loss_curve.png")
-    print("  - artifacts/lstm_predictions_vs_actuals.png")
+    print(f"\nVisualizations saved successfully for {model_name.upper()}:")
+    print(f"  - ../artifacts/{model_name}_loss_curve.png")
+    print(f"  - ../artifacts/{model_name}_predictions_vs_actuals.png")
 
 if __name__ == "__main__":
-    train_model()
+    import argparse
+    parser = argparse.ArgumentParser(description="Train water quality prediction models.")
+    parser.add_argument("--model", type=str, default="lstm", choices=["lstm", "gru", "seq2seq", "xgboost"],
+                        help="Model to train (lstm, gru, seq2seq, xgboost)")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+    args = parser.parse_args()
+    
+    train_model(model_name=args.model, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr)
+

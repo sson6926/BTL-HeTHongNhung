@@ -22,7 +22,7 @@ import numpy as np
 import torch
 
 from app.core.config import settings
-from app.ml.model import WaterQualityLSTM
+from app.ml.model import WaterQualityLSTM, WaterQualityGRU
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,8 @@ class PredictionService:
     """
 
     def __init__(self) -> None:
-        self._model: WaterQualityLSTM | None = None
+        self._model: Any | None = None
+        self._model_name: str = "lstm"
         self._scaler: Any | None = None
         self._device: torch.device = torch.device("cpu")
         self._loaded: bool = False
@@ -92,20 +93,31 @@ class PredictionService:
             self._scaler = pickle.load(f)
         logger.info("MinMaxScaler loaded from %s", scaler_path)
 
+        # Determine model type from file name
+        model_name = "lstm"
+        if "gru" in model_path.lower():
+            model_name = "gru"
+        self._model_name = model_name
+
         # Load model
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._model = WaterQualityLSTM(
-            input_size=3, hidden_size=64, num_layers=2, output_size=3, dropout=0.2
-        )
+        if model_name == "lstm":
+            self._model = WaterQualityLSTM(
+                input_size=3, hidden_size=64, num_layers=2, output_size=3, dropout=0.2
+            )
+        else:
+            self._model = WaterQualityGRU(
+                input_size=3, hidden_size=64, num_layers=2, output_size=3, dropout=0.2
+            )
         state_dict = torch.load(model_path, map_location=self._device)
         self._model.load_state_dict(state_dict)
         self._model.to(self._device)
         self._model.eval()
+        logger.info(
+            "%s model loaded from %s  (device=%s)", model_name.upper(), model_path, self._device
+        )
 
         self._loaded = True
-        logger.info(
-            "LSTM model loaded from %s  (device=%s)", model_path, self._device
-        )
 
     @property
     def is_ready(self) -> bool:
